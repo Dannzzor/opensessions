@@ -1,0 +1,22 @@
+{
+  "name": "@opensessions/tui",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.tsx",
+  "scripts": {
+    "start": "bun run src/index.tsx",
+    "dev": "bun --watch run src/index.tsx",
+    "build": "bun run build.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@opensessions/core": "workspace:*",
+    "@opentui/core": "^0.1.88",
+    "@opentui/solid": "^0.1.88",
+    "solid-js": "^1.9.11"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
