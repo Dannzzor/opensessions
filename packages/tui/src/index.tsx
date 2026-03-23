@@ -9,16 +9,19 @@ import {
   type ServerMessage,
   type SessionData,
   type ClientCommand,
-  C,
-  STATUS_COLORS,
+  type Theme,
   SERVER_PORT,
   SERVER_HOST,
+  BUILTIN_THEMES,
+  resolveTheme,
 } from "@opensessions/core";
 
 const SPINNERS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const UNSEEN_ICON = "◆";
+const UNSEEN_ICON = "●";
 const BOLD = TextAttributes.BOLD;
 const DIM = TextAttributes.DIM;
+
+const THEME_NAMES = Object.keys(BUILTIN_THEMES);
 
 function getClientTty(): string {
   try {
@@ -32,11 +35,20 @@ function getClientTty(): string {
 function App() {
   const renderer = useRenderer();
 
+  // --- Theme state (driven by server) ---
+  const [theme, setTheme] = createSignal<Theme>(resolveTheme(undefined));
+  const P = () => theme().palette;
+  const S = () => theme().status;
+
   const [sessions, setSessions] = createStore<SessionData[]>([]);
   const [focusedSession, setFocusedSession] = createSignal<string | null>(null);
   const [currentSession, setCurrentSession] = createSignal<string | null>(null);
   const [connected, setConnected] = createSignal(false);
   const [spinIdx, setSpinIdx] = createSignal(0);
+
+  // --- Modal state ---
+  const [modal, setModal] = createSignal<"none" | "theme-picker" | "confirm-kill">("none");
+  const [killTarget, setKillTarget] = createSignal<string | null>(null);
 
   const clientTty = getClientTty();
   let ws: WebSocket | null = null;
@@ -46,6 +58,7 @@ function App() {
   }
 
   function switchToSession(name: string) {
+    send({ type: "mark-seen", name });
     Bun.spawn(
       clientTty
         ? ["tmux", "switch-client", "-c", clientTty, "-t", name]
@@ -67,7 +80,25 @@ function App() {
 
     setFocusedSession(next);
     send({ type: "focus-session", name: next });
-    send({ type: "mark-seen", name: next });
+  }
+
+  function applyTheme(themeName: string) {
+    send({ type: "set-theme", theme: themeName });
+  }
+
+  function spawnSessionizer() {
+    renderer.destroy();
+    const proc = Bun.spawnSync(["/usr/local/bin/tmux-sessionizer"], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    // Re-launch TUI after sessionizer exits
+    render(() => <App />, {
+      exitOnCtrlC: true,
+      targetFPS: 30,
+      useMouse: true,
+    });
   }
 
   onMount(() => {
@@ -87,6 +118,7 @@ function App() {
             setSessions(reconcile(msg.sessions, { key: "name" }));
             setFocusedSession(msg.focusedSession);
             setCurrentSession(msg.currentSession);
+            setTheme(resolveTheme(msg.theme));
           } else if (msg.type === "focus") {
             setFocusedSession(msg.focusedSession);
             setCurrentSession(msg.currentSession);
@@ -116,6 +148,42 @@ function App() {
   });
 
   useKeyboard((key) => {
+    const currentModal = modal();
+
+    // --- Theme picker modal handles its own keys ---
+    if (currentModal === "theme-picker") {
+      if (key.name === "escape" || key.name === "q") {
+        setModal("none");
+      }
+      // Select component handles j/k/up/down/enter internally
+      return;
+    }
+
+    // --- Confirm kill modal ---
+    if (currentModal === "confirm-kill") {
+      if (key.name === "y") {
+        const target = killTarget();
+        if (target) send({ type: "kill-session", name: target });
+        setKillTarget(null);
+        setModal("none");
+      } else {
+        setKillTarget(null);
+        setModal("none");
+      }
+      return;
+    }
+
+    // --- Normal mode keybindings ---
+    // Alt+Up / Alt+Down → reorder session
+    if ((key.meta || key.option) && (key.name === "up" || key.name === "down")) {
+      const focused = focusedSession();
+      if (focused) {
+        const delta: -1 | 1 = key.name === "up" ? -1 : 1;
+        send({ type: "reorder-session", name: focused, delta });
+      }
+      return;
+    }
+
     switch (key.name) {
       case "q":
       case "escape":
@@ -147,6 +215,22 @@ function App() {
       case "r":
         send({ type: "refresh" });
         break;
+      case "t":
+        setModal("theme-picker");
+        break;
+      case "d":
+      case "x": {
+        const focused = focusedSession();
+        if (focused) {
+          setKillTarget(focused);
+          setModal("confirm-kill");
+        }
+        break;
+      }
+      case "n":
+      case "c":
+        spawnSessionizer();
+        break;
       default: {
         if (key.number) {
           const idx = parseInt(key.name, 10) - 1;
@@ -169,19 +253,19 @@ function App() {
   const isFocused = createSelector(focusedSession);
 
   return (
-    <box flexDirection="column" flexGrow={1} backgroundColor={C.crust}>
+    <box flexDirection="column" flexGrow={1} backgroundColor={P().crust}>
       {/* Header */}
       <box flexDirection="column" paddingLeft={2} paddingTop={1} flexShrink={0}>
         <text>
-          <span style={{ fg: C.blue, attributes: BOLD }}>⚡ Sessions</span>
+          <span style={{ fg: P().blue, attributes: BOLD }}>⚡ Sessions</span>
           {"  "}
-          <span style={{ fg: runningCount() > 0 ? C.text : C.overlay0 }}>{String(sessions.length)}</span>
+          <span style={{ fg: runningCount() > 0 ? P().text : P().overlay0 }}>{String(sessions.length)}</span>
           {runningCount() > 0 ? " " : ""}
-          {runningCount() > 0 ? <span style={{ fg: C.yellow }}>{"⚡"}{runningCount()}</span> : ""}
+          {runningCount() > 0 ? <span style={{ fg: P().yellow }}>{"⚡"}{runningCount()}</span> : ""}
           {unseenCount() > 0 ? " " : ""}
-          {unseenCount() > 0 ? <span style={{ fg: C.teal }}>{"◆"}{unseenCount()}</span> : ""}
+          {unseenCount() > 0 ? <span style={{ fg: P().teal }}>{"●"}{unseenCount()}</span> : ""}
         </text>
-        <text style={{ fg: C.surface2 }}>{"─".repeat(22)}</text>
+        <text style={{ fg: P().surface2 }}>{"─".repeat(22)}</text>
       </box>
 
       {/* Session list */}
@@ -194,6 +278,8 @@ function App() {
               isFocused={isFocused(session.name)}
               isCurrent={session.name === currentSession()}
               spinIdx={spinIdx}
+              theme={theme}
+              statusColors={S}
               onSelect={() => {
                 setFocusedSession(session.name);
                 send({ type: "focus-session", name: session.name });
@@ -206,23 +292,126 @@ function App() {
 
       {/* Footer */}
       <box flexDirection="column" paddingLeft={2} paddingBottom={1} flexShrink={0}>
-        <text style={{ fg: C.surface2 }}>{"─".repeat(22)}</text>
+        <text style={{ fg: P().surface2 }}>{"─".repeat(22)}</text>
         <text>
-          <span style={{ fg: C.overlay0, attributes: DIM }}>⇥</span>
+          <span style={{ fg: P().overlay0, attributes: DIM }}>⇥</span>
           {" "}
-          <span style={{ fg: C.overlay1 }}>cycle</span>
+          <span style={{ fg: P().overlay1 }}>cycle</span>
           {"  "}
-          <span style={{ fg: C.overlay0, attributes: DIM }}>1-9</span>
+          <span style={{ fg: P().overlay0, attributes: DIM }}>1-9</span>
           {" "}
-          <span style={{ fg: C.overlay1 }}>jump</span>
+          <span style={{ fg: P().overlay1 }}>jump</span>
           {"  "}
-          <span style={{ fg: C.overlay0, attributes: DIM }}>⏎</span>
+          <span style={{ fg: P().overlay0, attributes: DIM }}>⏎</span>
           {" "}
-          <span style={{ fg: C.overlay1 }}>go</span>
+          <span style={{ fg: P().overlay1 }}>go</span>
           {"  "}
-          <span style={{ fg: C.overlay0, attributes: DIM }}>q</span>
+          <span style={{ fg: P().overlay0, attributes: DIM }}>t</span>
           {" "}
-          <span style={{ fg: C.overlay1 }}>quit</span>
+          <span style={{ fg: P().overlay1 }}>theme</span>
+          {"  "}
+          <span style={{ fg: P().overlay0, attributes: DIM }}>q</span>
+          {" "}
+          <span style={{ fg: P().overlay1 }}>quit</span>
+        </text>
+      </box>
+
+      {/* Theme picker overlay */}
+      <Show when={modal() === "theme-picker"}>
+        <ThemePicker
+          palette={P}
+          onSelect={(name) => {
+            applyTheme(name);
+            setModal("none");
+          }}
+          onClose={() => setModal("none")}
+        />
+      </Show>
+
+      {/* Kill confirmation overlay */}
+      <Show when={modal() === "confirm-kill"}>
+        <box
+          position="absolute"
+          top={0} left={0} right={0} bottom={0}
+          justifyContent="center"
+          alignItems="center"
+          backgroundColor="transparent"
+        >
+          <box
+            border
+            borderStyle="rounded"
+            borderColor={P().red}
+            backgroundColor={P().mantle}
+            padding={1}
+            paddingX={2}
+            flexDirection="column"
+            alignItems="center"
+          >
+            <text>
+              <span style={{ fg: P().red, attributes: BOLD }}>Kill session?</span>
+            </text>
+            <text>
+              <span style={{ fg: P().text }}>{killTarget() ?? ""}</span>
+            </text>
+            <text>
+              <span style={{ fg: P().overlay0 }}>y</span>
+              <span style={{ fg: P().overlay1 }}>/</span>
+              <span style={{ fg: P().overlay0 }}>n</span>
+            </text>
+          </box>
+        </box>
+      </Show>
+    </box>
+  );
+}
+
+// --- Theme Picker ---
+
+interface ThemePickerProps {
+  palette: Accessor<Theme["palette"]>;
+  onSelect: (name: string) => void;
+  onClose: () => void;
+}
+
+function ThemePicker(props: ThemePickerProps) {
+  const options = THEME_NAMES.map((name) => ({
+    name,
+    value: name,
+  }));
+
+  return (
+    <box
+      position="absolute"
+      top={0} left={0} right={0} bottom={0}
+      justifyContent="center"
+      alignItems="center"
+      backgroundColor="transparent"
+    >
+      <box
+        border
+        borderStyle="rounded"
+        borderColor={props.palette().blue}
+        backgroundColor={props.palette().mantle}
+        padding={1}
+        flexDirection="column"
+        width={30}
+      >
+        <text>
+          <span style={{ fg: props.palette().blue, attributes: BOLD }}>Select Theme</span>
+        </text>
+        <text style={{ fg: props.palette().surface2 }}>{"─".repeat(26)}</text>
+        <select
+          options={options}
+          onSelect={(_index, option) => {
+            props.onSelect(option.value as string);
+          }}
+          focused
+          height={14}
+          selectedBackgroundColor={props.palette().surface0}
+          selectedTextColor={props.palette().text}
+        />
+        <text style={{ fg: props.palette().overlay0 }}>
+          <span style={{ attributes: DIM }}>esc</span>{" close"}
         </text>
       </box>
     </box>
@@ -237,10 +426,15 @@ interface SessionCardProps {
   isFocused: boolean;
   isCurrent: boolean;
   spinIdx: Accessor<number>;
+  theme: Accessor<Theme>;
+  statusColors: Accessor<Theme["status"]>;
   onSelect: () => void;
 }
 
 function SessionCard(props: SessionCardProps) {
+  const P = () => props.theme().palette;
+  const SC = () => props.statusColors();
+
   const status = () => props.session.agentState?.status ?? "idle";
   const unseen = () => props.session.unseen;
 
@@ -250,17 +444,17 @@ function SessionCard(props: SessionCardProps) {
   const accentColor = () => {
     if (isUnseenTerminal()) return unseenAccentColor();
     const s = status();
-    if (s === "running") return C.yellow;
-    if (props.isCurrent) return C.green;
-    if (props.isFocused) return C.blue;
-    return C.crust;
+    if (s === "running") return P().yellow;
+    if (props.isCurrent) return P().green;
+    if (props.isFocused) return P().blue;
+    return P().crust;
   };
 
   const unseenAccentColor = () => {
     const s = status();
-    if (s === "error") return C.red;
-    if (s === "interrupted") return C.peach;
-    return C.teal;
+    if (s === "error") return P().red;
+    if (s === "interrupted") return P().peach;
+    return P().teal;
   };
 
   const statusIcon = () => {
@@ -273,12 +467,12 @@ function SessionCard(props: SessionCardProps) {
   const statusColor = () => {
     if (isUnseenTerminal()) return unseenAccentColor();
     const s = status();
-    if (s === "running") return STATUS_COLORS[s];
+    if (s === "running") return SC()[s];
     return "";
   };
 
   const nameColor = () =>
-    props.isFocused ? C.text : props.isCurrent ? C.subtext1 : C.subtext0;
+    props.isFocused ? P().text : props.isCurrent ? P().subtext1 : P().subtext0;
 
   const truncName = () => {
     const n = props.session.name;
@@ -296,7 +490,7 @@ function SessionCard(props: SessionCardProps) {
       <box
         flexDirection="row"
         flexShrink={0}
-        backgroundColor={props.isFocused ? C.surface0 : "transparent"}
+        backgroundColor={props.isFocused ? P().surface0 : "transparent"}
         paddingTop={1}
         paddingBottom={1}
         onMouseDown={props.onSelect}
@@ -306,7 +500,7 @@ function SessionCard(props: SessionCardProps) {
 
         {/* Index column */}
         <box width={2} flexShrink={0}>
-          <text style={{ fg: props.isFocused ? C.overlay1 : C.surface2, attributes: DIM }}>{props.index}</text>
+          <text style={{ fg: props.isFocused ? P().overlay1 : P().surface2, attributes: DIM }}>{props.index}</text>
         </box>
 
         {/* Content column */}
@@ -326,7 +520,7 @@ function SessionCard(props: SessionCardProps) {
           {/* Row 2: branch */}
           <Show when={props.session.branch}>
             <text truncate>
-              <span style={{ fg: C.pink }}>{truncBranch()}</span>
+              <span style={{ fg: P().pink }}>{truncBranch()}</span>
             </text>
           </Show>
         </box>
