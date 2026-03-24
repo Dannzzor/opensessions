@@ -28,6 +28,7 @@ export interface ServerState {
   focusedSession: string | null;
   currentSession: string | null;
   theme: string | undefined;
+  sidebarWidth: number;
   ts: number;
 }
 

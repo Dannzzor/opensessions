@@ -49,6 +49,8 @@ function App() {
 
   const clientTty = getClientTty();
   let ws: WebSocket | null = null;
+  // Shared mutable ref for sidebar width — updated by both state messages and resize messages
+  let sidebarWidthRef = 26;
 
   function send(cmd: ClientCommand) {
     if (connected() && ws) ws.send(JSON.stringify(cmd));
@@ -116,6 +118,8 @@ function App() {
             setFocusedSession(msg.focusedSession);
             setCurrentSession(msg.currentSession);
             setTheme(resolveTheme(msg.theme));
+            // Sync sidebar width so SIGWINCH handler knows the real server width
+            if (msg.sidebarWidth) sidebarWidthRef = msg.sidebarWidth;
           } else if (msg.type === "focus") {
             setFocusedSession(msg.focusedSession);
             setCurrentSession(msg.currentSession);
@@ -139,7 +143,6 @@ function App() {
     const paneIdForResize = process.env.TMUX_PANE;
     let pendingClientResize = false;
     let snapCooldown = false;
-    let serverWidth = 26; // Updated from server messages
     let resizeDebounce: ReturnType<typeof setTimeout> | null = null;
 
     if (paneIdForResize) {
@@ -148,7 +151,7 @@ function App() {
           // Client resize — snap back to server width
           pendingClientResize = false;
           snapCooldown = true;
-          sdk.resizePane(paneIdForResize, { width: serverWidth });
+          sdk.resizePane(paneIdForResize, { width: sidebarWidthRef });
           // The resize-pane we just did will trigger another SIGWINCH — ignore it
           setTimeout(() => { snapCooldown = false; }, 300);
         } else if (snapCooldown) {
@@ -160,7 +163,7 @@ function App() {
             resizeDebounce = null;
             const widthStr = sdk.display("#{pane_width}", { target: paneIdForResize });
             const newWidth = parseInt(widthStr, 10);
-            if (!isNaN(newWidth) && newWidth > 0 && newWidth !== serverWidth) {
+            if (!isNaN(newWidth) && newWidth > 0 && newWidth !== sidebarWidthRef) {
               send({ type: "report-width", width: newWidth });
             }
           }, 200);
@@ -178,7 +181,7 @@ function App() {
       try {
         const msg = JSON.parse(event.data as string);
         if (msg.type === "resize" && typeof msg.width === "number") {
-          serverWidth = msg.width;
+          sidebarWidthRef = msg.width;
           pendingClientResize = true;
         } else if (msg.type === "quit") {
           // Server told us to quit

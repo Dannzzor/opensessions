@@ -18,16 +18,20 @@ function rawTmux(args: string[]): string {
   } catch { return ""; }
 }
 
+const STASH_SESSION = "_os_stash";
+
 export class TmuxProvider implements MuxProvider {
   readonly name = "tmux";
 
   listSessions(): MuxSessionInfo[] {
-    return tmux.listSessions().map((s) => ({
-      name: s.name,
-      createdAt: s.createdAt,
-      dir: s.dir,
-      windows: s.windowCount,
-    }));
+    return tmux.listSessions()
+      .filter((s) => s.name !== STASH_SESSION)
+      .map((s) => ({
+        name: s.name,
+        createdAt: s.createdAt,
+        dir: s.dir,
+        windows: s.windowCount,
+      }));
   }
 
   switchSession(name: string, clientTty?: string): void {
@@ -93,19 +97,17 @@ export class TmuxProvider implements MuxProvider {
       ? tmux.listPanes({ scope: "session", target: sessionName })
       : tmux.listPanes();
 
-    // Build a set of hidden "opensessions" windows (detached break-pane orphans)
-    // A window named "opensessions" with only 1 pane is a hidden/orphan sidebar
-    const hiddenWindowIds = new Set<string>();
-    const windows = tmux.listWindows();
-    for (const w of windows) {
-      if (w.name === "opensessions" && w.paneCount === 1) {
-        hiddenWindowIds.add(w.id);
-      }
-    }
-
     return panes
-      .filter((p) => p.title === "opensessions" && !hiddenWindowIds.has(p.windowId))
+      .filter((p) => p.title === "opensessions" && p.sessionName !== STASH_SESSION)
       .map((p) => ({ paneId: p.id, sessionName: p.sessionName, windowId: p.windowId }));
+  }
+
+  /** Ensure the invisible stash session exists for hiding sidebar panes */
+  private ensureStash(): void {
+    const r = Bun.spawnSync(["tmux", "has-session", "-t", STASH_SESSION], { stdout: "pipe", stderr: "pipe" });
+    if (r.exitCode !== 0) {
+      rawTmux(["new-session", "-d", "-s", STASH_SESSION, "-x", "1", "-y", "1"]);
+    }
   }
 
   spawnSidebar(
@@ -124,7 +126,21 @@ export class TmuxProvider implements MuxProvider {
       ? panes.reduce((a, b) => (a.left <= b.left ? a : b))
       : panes.reduce((a, b) => (a.right >= b.right ? a : b));
 
-    // Always spawn fresh — no restore logic (kill-based toggle eliminates orphans)
+    // --- Try to restore a stashed sidebar pane ---
+    try {
+      const stashPanes = tmux.listPanes({ scope: "session", target: STASH_SESSION });
+      const stashedPane = stashPanes.find((p) => p.title === "opensessions");
+      if (stashedPane) {
+        plog("spawnSidebar: restoring from stash", { paneId: stashedPane.id, target: targetPane.id });
+        const joinFlag = position === "left" ? "-hb" : "-h";
+        rawTmux(["join-pane", joinFlag, "-l", String(width), "-s", stashedPane.id, "-t", targetPane.id]);
+        tmux.setPaneTitle(stashedPane.id, "opensessions");
+        tmux.selectPane(targetPane.id);
+        return stashedPane.id;
+      }
+    } catch { /* stash session doesn't exist yet — spawn fresh */ }
+
+    // --- No stashed pane, spawn fresh ---
     plog("spawnSidebar: spawning new", { target: targetPane.id, width, position });
     const newPane = tmux.splitWindow({
       target: targetPane.id,
@@ -145,7 +161,10 @@ export class TmuxProvider implements MuxProvider {
   }
 
   hideSidebar(paneId: string): void {
-    tmux.breakPane({ source: paneId, name: "opensessions" });
+    this.ensureStash();
+    // Move pane into invisible stash session (no client attached = not visible anywhere)
+    plog("hideSidebar: stashing pane", { paneId });
+    rawTmux(["join-pane", "-d", "-s", paneId, "-t", `${STASH_SESSION}:`]);
   }
 
   killSidebarPane(paneId: string): void {

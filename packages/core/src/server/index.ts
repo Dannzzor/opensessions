@@ -277,7 +277,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[]): v
       focusedSession = sessions[0]!.name;
     }
 
-    return { type: "state", sessions, focusedSession, currentSession: getCurrentSession(), theme: currentTheme, ts: Date.now() };
+    return { type: "state", sessions, focusedSession, currentSession: getCurrentSession(), theme: currentTheme, sidebarWidth, ts: Date.now() };
   }
 
   function broadcastState() {
@@ -333,11 +333,12 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[]): v
   function getProviderWithSidebar(): MuxProvider & {
     listSidebarPanes: NonNullable<MuxProvider["listSidebarPanes"]>;
     spawnSidebar: NonNullable<MuxProvider["spawnSidebar"]>;
+    hideSidebar: NonNullable<MuxProvider["hideSidebar"]>;
     killSidebarPane: NonNullable<MuxProvider["killSidebarPane"]>;
     resizeSidebarPane: NonNullable<MuxProvider["resizeSidebarPane"]>;
   } | null {
     for (const p of allProviders) {
-      if (p.listSidebarPanes && p.spawnSidebar && p.killSidebarPane && p.resizeSidebarPane) {
+      if (p.listSidebarPanes && p.spawnSidebar && p.hideSidebar && p.killSidebarPane && p.resizeSidebarPane) {
         return p as any;
       }
     }
@@ -366,15 +367,20 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[]): v
 
     if (sidebarVisible) {
       const panes = p.listSidebarPanes();
-      log("toggle", "OFF — killing panes", { count: panes.length, panes: panes.map((x) => x.paneId) });
+      log("toggle", "OFF — hiding panes (break-pane)", { count: panes.length, panes: panes.map((x) => x.paneId) });
       for (const pane of panes) {
-        p.killSidebarPane(pane.paneId);
+        p.hideSidebar(pane.paneId);
       }
       sidebarVisible = false;
     } else {
       sidebarVisible = true;
-      log("toggle", "ON — spawning in current window only");
-      ensureSidebarInWindow(p, ctx);
+      // Spawn/restore sidebar in ALL sessions' active windows at once (one entity)
+      const allWindows = sdk.listWindows();
+      const activeWindows = allWindows.filter((w) => w.active && w.sessionName !== "_os_stash");
+      log("toggle", "ON — spawning in all active windows", { count: activeWindows.length });
+      for (const w of activeWindows) {
+        ensureSidebarInWindow(p, { session: w.sessionName, windowId: w.id });
+      }
     }
     log("toggle", "done", { sidebarVisible });
   }
@@ -432,13 +438,8 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[]): v
         p.killSidebarPane(pane.paneId);
       }
     }
-    // Also kill any hidden sidebar windows
-    const allWindows = sdk.listWindows();
-    for (const w of allWindows) {
-      if (w.name === "opensessions") {
-        sdk.killWindow(w.id);
-      }
-    }
+    // Kill the stash session (holds hidden sidebar panes)
+    sdk.run(["kill-session", "-t", "_os_stash"]);
     // Broadcast quit to all TUI clients
     server.publish("sidebar", JSON.stringify({ type: "quit" }));
     sidebarVisible = false;
