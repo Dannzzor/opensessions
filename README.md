@@ -1,5 +1,9 @@
 # opensessions
 
+tmux is all you need. make tmux great again :) 
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/21d46849-e79f-4db0-92b6-fabf95efa403" />
+
 `opensessions` is a sidebar for `tmux` when your sessions, agents, and localhost tabs start multiplying.
 
 It lives inside your existing tmux workflow instead of replacing it: one small pane for session switching, agent state, repo breadcrumbs, and quick jumps back into the right terminal.
