@@ -32,17 +32,32 @@ Result: the workspace packages are installed and the TUI can run.
 
 ## 3. Add opensessions to your tmux config
 
-Open `~/.tmux.conf` and add these lines, replacing the path with your clone location:
+Open `~/.tmux.conf` and add one of these minimal entries:
+
+If you use TPM:
 
 ```tmux
-set -g @opensessions-key "s"
-set -g @opensessions-focus-key "S"
-set -g @opensessions-prefix-key "o"
-set -g @opensessions-prefix-focus-key "s"
-set -g @opensessions-prefix-toggle-key "t"
-set -g @opensessions-prefix-index-keys "1 2 3 4 5 6 7 8 9"
-set -g @opensessions-width "26"
+set -g @plugin 'Ataraxy-Labs/opensessions'
+```
+
+If you run from a local clone instead:
+
+```tmux
 source-file /absolute/path/to/opensessions/opensessions.tmux
+```
+
+If you added the TPM plugin line manually instead of using the one-line installer above, reload tmux and install plugins with:
+
+```bash
+tmux source-file ~/.tmux.conf
+~/.tmux/plugins/tpm/bin/install_plugins
+```
+
+All `@opensessions-*` tmux options already have defaults. Add overrides only when you want different keys or width, for example:
+
+```tmux
+set -g @opensessions-prefix-key "g"
+set -g @opensessions-width "30"
 ```
 
 Result: tmux knows how to toggle the sidebar, how to reveal and focus it directly, and how to enter an opensessions command table for quick direct switching.
@@ -53,6 +68,12 @@ Run:
 
 ```bash
 tmux source-file ~/.tmux.conf
+```
+
+If you are using TPM and have not installed plugins yet, also run:
+
+```bash
+~/.tmux/plugins/tpm/bin/install_plugins
 ```
 
 Result: the new keybinding is active in your current tmux server.

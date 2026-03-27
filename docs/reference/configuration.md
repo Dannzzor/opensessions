@@ -92,18 +92,35 @@ The tmux integration reads these tmux options instead of `config.json`:
 | `@opensessions-index-keys` | unset | Optional space-separated no-prefix tmux keys mapped in order to visible sessions `1` through `9` |
 | `@opensessions-width` | `26` | exported as `OPENSESSIONS_WIDTH` by the tmux bootstrap script |
 
-Example:
+Minimal install:
+
+If you use TPM, this is enough:
 
 ```tmux
-set -g @opensessions-key "s"
-set -g @opensessions-focus-key "S"
-set -g @opensessions-prefix-key "o"
-set -g @opensessions-prefix-focus-key "s"
-set -g @opensessions-prefix-toggle-key "t"
-set -g @opensessions-prefix-index-keys "1 2 3 4 5 6 7 8 9"
-set -g @opensessions-width "30"
+set -g @plugin 'Ataraxy-Labs/opensessions'
+```
+
+After adding it, reload tmux and ask TPM to install plugins:
+
+```bash
+tmux source-file ~/.tmux.conf
+~/.tmux/plugins/tpm/bin/install_plugins
+```
+
+If you run from a local checkout instead, this is enough:
+
+```tmux
 source-file /absolute/path/to/opensessions/opensessions.tmux
 ```
+
+Optional overrides:
+
+```tmux
+set -g @opensessions-prefix-key "g"
+set -g @opensessions-width "30"
+```
+
+All other tmux options fall back to the defaults shown in the table above.
 
 Recommended mapping:
 

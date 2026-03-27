@@ -10,6 +10,37 @@ It lives inside your existing tmux workflow instead of replacing it: one small p
 
 tmux is the only supported mux today. There is older zellij integration code in the repo, but it is not stable enough to document as supported; we are looking for maintainers who want to help bring it back to that bar.
 
+## Install With TPM
+
+Requirements:
+
+- `tmux`
+- `bun`
+- [TPM](https://github.com/tmux-plugins/tpm)
+
+Add this to `~/.tmux.conf`:
+
+```tmux
+set -g @plugin 'Ataraxy-Labs/opensessions'
+```
+
+Then reload tmux and install plugins:
+
+```bash
+tmux source-file ~/.tmux.conf
+~/.tmux/plugins/tpm/bin/install_plugins
+```
+
+Open the sidebar with `prefix s`.
+
+TPM clones the repo into `~/.tmux/plugins/opensessions`. It does not install a standalone `opensessions` binary. `opensessions` runs from that checkout with your local `bun` installation.
+
+If you want the same setup as a single shell command:
+
+```bash
+grep -q "Ataraxy-Labs/opensessions" ~/.tmux.conf 2>/dev/null || printf '\nset -g @plugin '\''Ataraxy-Labs/opensessions'\''\n' >> ~/.tmux.conf && tmux source-file ~/.tmux.conf && ~/.tmux/plugins/tpm/bin/install_plugins
+```
+
 ## Support Status
 
 - `@opensessions/mux-tmux` and the tmux plugin flow are supported.
@@ -25,15 +56,7 @@ tmux is the only supported mux today. There is older zellij integration code in 
 - A tmux command table on `prefix o`, optional no-prefix shortcuts, in-app theme switching, and plugin hooks for more mux providers or watchers.
 - Bun workspace, source-first execution, and a local server on `127.0.0.1:7391`.
 
-## Quick Start
-
-Fastest tmux install if you already use TPM:
-
-```bash
-grep -q "Ataraxy-Labs/opensessions" ~/.tmux.conf 2>/dev/null || printf '\nset -g @plugin '\''Ataraxy-Labs/opensessions'\''\n' >> ~/.tmux.conf && tmux source-file ~/.tmux.conf && ~/.tmux/plugins/tpm/bin/install_plugins
-```
-
-That adds the plugin to your tmux config, reloads tmux, and asks TPM to install it from GitHub. `bun` still needs to be installed locally; opensessions bootstraps its workspace inside the TPM checkout on first load.
+## Local Development
 
 Smoke test from a local clone:
 
@@ -47,7 +70,7 @@ bun run start:tui
 
 That starts the sidebar client and auto-launches the server if needed.
 
-For the full tmux workflow with keybindings, TPM setup, and automatic pane management, follow the guide below.
+For the full tmux workflow with keybindings, troubleshooting, and configuration options, follow the guide below.
 
 ## Docs
 
