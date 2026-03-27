@@ -1,8 +1,9 @@
 import { render } from "@opentui/solid";
+import { appendFileSync } from "fs";
 import { createSignal, createEffect, onCleanup, onMount, batch, For, Show, createMemo, createSelector, type Accessor } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useKeyboard, useRenderer } from "@opentui/solid";
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes, type MouseEvent } from "@opentui/core";
 
 import { ensureServer } from "@opensessions/core";
 import {
@@ -50,10 +51,18 @@ const SPARK_BLOCKS = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█
 const THEME_NAMES = Object.keys(BUILTIN_THEMES);
 const DEFAULT_DETAIL_PANEL_HEIGHT = 10;
 const MIN_DETAIL_PANEL_HEIGHT = 4;
-const MAX_DETAIL_PANEL_HEIGHT = 18;
+const RESIZE_DEBUG_LOG = "/tmp/opensessions-tui-resize.log";
+
+function logResizeDebug(message: string, data?: Record<string, unknown>): void {
+  const ts = new Date().toISOString();
+  const extra = data ? ` ${JSON.stringify(data)}` : "";
+  try {
+    appendFileSync(RESIZE_DEBUG_LOG, `[${ts}] [pid:${process.pid}] ${message}${extra}\n`);
+  } catch {}
+}
 
 function clampDetailPanelHeight(height: number): number {
-  return Math.max(MIN_DETAIL_PANEL_HEIGHT, Math.min(MAX_DETAIL_PANEL_HEIGHT, Math.round(height)));
+  return Math.max(MIN_DETAIL_PANEL_HEIGHT, Math.round(height));
 }
 
 function getStoredDetailPanelHeight(sessionName: string): number {
@@ -140,6 +149,8 @@ function App() {
   const [connected, setConnected] = createSignal(false);
   const [spinIdx, setSpinIdx] = createSignal(0);
   const [detailPanelHeight, setDetailPanelHeight] = createSignal(DEFAULT_DETAIL_PANEL_HEIGHT);
+  const [isDetailResizeHover, setIsDetailResizeHover] = createSignal(false);
+  const [isDetailResizing, setIsDetailResizing] = createSignal(false);
 
   // --- Modal state ---
   const [modal, setModal] = createSignal<"none" | "theme-picker" | "confirm-kill">("none");
@@ -148,6 +159,8 @@ function App() {
   const [clientTty, setClientTty] = createSignal(getClientTty());
   let ws: WebSocket | null = null;
   let startupFocusSynced = false;
+  let detailResizeStartY = 0;
+  let detailResizeStartHeight = DEFAULT_DETAIL_PANEL_HEIGHT;
   const startupSessionName = getLocalSessionName();
 
   function send(cmd: ClientCommand) {
@@ -202,6 +215,71 @@ function App() {
     }
   }
 
+  function beginDetailResize(event: MouseEvent) {
+    logResizeDebug("beginDetailResize", {
+      button: event.button,
+      x: event.x,
+      y: event.y,
+      currentHeight: detailPanelHeight(),
+      session: mySession(),
+      target: event.target?.id ?? null,
+    });
+    if (event.button !== 0) return;
+    (renderer as any).setCapturedRenderable?.(event.target ?? undefined);
+    detailResizeStartY = event.y;
+    detailResizeStartHeight = detailPanelHeight();
+    setIsDetailResizing(true);
+    event.stopPropagation();
+  }
+
+  function handleDetailResizeDrag(event: MouseEvent) {
+    logResizeDebug("handleDetailResizeDrag", {
+      x: event.x,
+      y: event.y,
+      isResizing: isDetailResizing(),
+      startY: detailResizeStartY,
+      startHeight: detailResizeStartHeight,
+      currentHeight: detailPanelHeight(),
+      session: mySession(),
+    });
+    if (!isDetailResizing()) return;
+    const delta = detailResizeStartY - event.y;
+    const nextHeight = clampDetailPanelHeight(detailResizeStartHeight + delta);
+    setDetailPanelHeight(nextHeight);
+    logResizeDebug("handleDetailResizeDrag:applied", {
+      delta,
+      nextHeight,
+      session: mySession(),
+    });
+    event.stopPropagation();
+  }
+
+  function endDetailResize(event?: MouseEvent) {
+    logResizeDebug("endDetailResize", {
+      x: event?.x,
+      y: event?.y,
+      isResizing: isDetailResizing(),
+      currentHeight: detailPanelHeight(),
+      session: mySession(),
+      target: event?.target?.id ?? null,
+    });
+    if (!isDetailResizing()) return;
+    (renderer as any).setCapturedRenderable?.(undefined);
+    setIsDetailResizing(false);
+    setIsDetailResizeHover(false);
+
+    const sessionName = mySession();
+    if (sessionName) {
+      persistDetailPanelHeight(sessionName, detailPanelHeight());
+      logResizeDebug("endDetailResize:persisted", {
+        session: sessionName,
+        height: detailPanelHeight(),
+      });
+    }
+
+    event?.stopPropagation();
+  }
+
   function createNewSession() {
     if (muxCtx.type !== "tmux") {
       send({ type: "new-session" });
@@ -218,6 +296,12 @@ function App() {
   }
 
   onMount(() => {
+    logResizeDebug("mount", {
+      startupSessionName,
+      localSessionName: getLocalSessionName(),
+      muxType: muxCtx.type,
+      tmuxPane: process.env.TMUX_PANE ?? null,
+    });
     // Refocus the main pane once terminal capability detection finishes.
     // This avoids the race where start.sh refocuses too early and capability
     // responses leak as garbage text into the main pane.
@@ -327,7 +411,20 @@ function App() {
   createEffect(() => {
     const sessionName = mySession();
     if (!sessionName) return;
-    setDetailPanelHeight(getStoredDetailPanelHeight(sessionName));
+    const storedHeight = getStoredDetailPanelHeight(sessionName);
+    logResizeDebug("loadStoredDetailPanelHeight", {
+      session: sessionName,
+      storedHeight,
+    });
+    setDetailPanelHeight(storedHeight);
+  });
+
+  createEffect(() => {
+    logResizeDebug("detailPanelHeight:changed", {
+      height: detailPanelHeight(),
+      session: mySession(),
+      isResizing: isDetailResizing(),
+    });
   });
 
   useKeyboard((key) => {
@@ -489,17 +586,29 @@ function App() {
         </For>
       </scrollbox>
 
-      {/* Detail panel — focused session info, fixed height */}
+      {/* Detail panel — focused session info, draggable height */}
       <Show when={focusedData()}>
         {(data) => (
-          <scrollbox maxHeight={detailPanelHeight()} flexShrink={0}>
+          <scrollbox height={detailPanelHeight()} maxHeight={detailPanelHeight()} flexShrink={0}>
             <DetailPanel
               session={data()}
-              panelHeight={detailPanelHeight()}
               theme={theme}
               statusColors={S}
               spinIdx={spinIdx}
-              onResize={resizeDetailPanel}
+              onDismissAgent={(agent) => {
+                send({
+                  type: "dismiss-agent",
+                  session: data().name,
+                  agent: agent.agent,
+                  threadId: agent.threadId,
+                });
+              }}
+              isResizeHover={isDetailResizeHover()}
+              isResizing={isDetailResizing()}
+              onResizeStart={beginDetailResize}
+              onResizeDrag={handleDetailResizeDrag}
+              onResizeEnd={endDetailResize}
+              onResizeHoverChange={setIsDetailResizeHover}
             />
           </scrollbox>
         )}
@@ -515,10 +624,6 @@ function App() {
           <span style={{ fg: P().overlay1 }}>{" go  "}</span>
           <span style={{ fg: P().overlay0 }}>{"t"}</span>
           <span style={{ fg: P().overlay1 }}>{" theme"}</span>
-        </text>
-        <text>
-          <span style={{ fg: P().overlay0 }}>{"  ←→"}</span>
-          <span style={{ fg: P().overlay1 }}>{" detail"}</span>
         </text>
       </box>
 
@@ -650,16 +755,20 @@ function buildSparkline(timestamps: number[], width: number, windowMs: number = 
 
 interface DetailPanelProps {
   session: SessionData;
-  panelHeight: number;
   theme: Accessor<Theme>;
   statusColors: Accessor<Theme["status"]>;
   spinIdx: Accessor<number>;
-  onResize: (delta: -1 | 1) => void;
+  onDismissAgent: (agent: SessionData["agents"][number]) => void;
+  isResizeHover: boolean;
+  isResizing: boolean;
+  onResizeStart: (event: MouseEvent) => void;
+  onResizeDrag: (event: MouseEvent) => void;
+  onResizeEnd: (event?: MouseEvent) => void;
+  onResizeHoverChange: (hovered: boolean) => void;
 }
 
 function DetailPanel(props: DetailPanelProps) {
   const P = () => props.theme().palette;
-  const SC = () => props.statusColors();
 
   const agents = () => props.session.agents ?? [];
   const hasAgents = () => agents().length > 0;
@@ -683,23 +792,47 @@ function DetailPanel(props: DetailPanelProps) {
 
   return (
     <box flexDirection="column" flexShrink={0} paddingLeft={1}>
-      <text style={{ fg: P().surface2 }}>{"─".repeat(26)}</text>
+      <text
+        selectable={false}
+        onMouseDown={(event) => {
+          logResizeDebug("separator:onMouseDown", { x: event.x, y: event.y, button: event.button, session: props.session.name });
+          event.preventDefault();
+          props.onResizeStart(event);
+        }}
+        onMouseDrag={(event) => {
+          logResizeDebug("separator:onMouseDrag", { x: event.x, y: event.y, button: event.button, session: props.session.name });
+          event.preventDefault();
+          props.onResizeDrag(event);
+        }}
+        onMouseDragEnd={(event) => {
+          logResizeDebug("separator:onMouseDragEnd", { x: event.x, y: event.y, button: event.button, session: props.session.name });
+          event.preventDefault();
+          props.onResizeEnd(event);
+        }}
+        onMouseUp={(event) => {
+          logResizeDebug("separator:onMouseUp", { x: event.x, y: event.y, button: event.button, session: props.session.name });
+          event.preventDefault();
+          props.onResizeEnd(event);
+        }}
+        onMouseOver={() => props.onResizeHoverChange(true)}
+        onMouseOut={() => {
+          if (!props.isResizing) props.onResizeHoverChange(false);
+        }}
+        style={{
+          fg: props.isResizing
+            ? P().blue
+            : props.isResizeHover
+              ? P().overlay1
+              : P().surface2,
+        }}
+      >
+        {"─".repeat(26)}
+      </text>
 
-      {/* Directory + resize controls */}
-      <box flexDirection="row" paddingRight={1}>
-        <text truncate flexGrow={1}>
-          <span style={{ fg: P().overlay0, attributes: DIM }}>{truncDir()}</span>
-        </text>
-        <text onMouseDown={() => props.onResize(-1)}>
-          <span style={{ fg: P().overlay0 }}>-</span>
-        </text>
-        <text>
-          <span style={{ fg: P().overlay1 }}>{` ${props.panelHeight} `}</span>
-        </text>
-        <text onMouseDown={() => props.onResize(1)}>
-          <span style={{ fg: P().overlay0 }}>+</span>
-        </text>
-      </box>
+      {/* Directory */}
+      <text truncate>
+        <span style={{ fg: P().overlay0, attributes: DIM }}>{truncDir()}</span>
+      </text>
 
       {/* Listening ports */}
       <Show when={props.session.ports?.length}>
@@ -720,50 +853,93 @@ function DetailPanel(props: DetailPanelProps) {
       {/* Agent instances */}
       <Show when={hasAgents()}>
         <For each={agents()}>
-          {(agent, i) => {
-            const isTerminal = () => ["done", "error", "interrupted"].includes(agent.status);
-            const isUnseen = () => isTerminal() && agent.unseen === true;
-            const icon = () => {
-              if (isUnseen()) return UNSEEN_ICON;
-              if (isTerminal()) return agent.status === "done" ? "✓" : agent.status === "error" ? "✗" : "⚠";
-              if (agent.status === "running") return SPINNERS[props.spinIdx() % SPINNERS.length]!;
-              if (agent.status === "waiting") return "◉";
-              return "○";
-            };
-            const color = () => {
-              if (isTerminal()) {
-                if (agent.status === "error") return P().red;
-                if (agent.status === "interrupted") return P().peach;
-                return isUnseen() ? P().teal : P().green;
-              }
-              return SC()[agent.status];
-            };
-            return (
-              <box flexDirection="column" flexShrink={0}>
-                {/* Spacer between agents, or before first */}
-                <box height={1} />
-                {/* Row: icon + name … status */}
-                <box flexDirection="row" paddingRight={1}>
-                  <text flexGrow={1} truncate>
-                    <span style={{ fg: color() }}>{icon()}</span>
-                    <span style={{ fg: P().subtext1 }}>{" "}{agent.agent}</span>
-                  </text>
-                  <Show when={!isTerminal() || !isUnseen()}>
-                    <text flexShrink={0}>
-                      <span style={{ fg: color(), attributes: DIM }}>{statusText(agent.status)}</span>
-                    </text>
-                  </Show>
-                </box>
-                {/* Thread name — aligned with agent name */}
-                <Show when={agent.threadName}>
-                  <text paddingLeft={2} paddingRight={1}>
-                    <span style={{ fg: isUnseen() ? color() : P().overlay0 }}>{agent.threadName}</span>
-                  </text>
-                </Show>
-              </box>
-            );
-          }}
+          {(agent) => (
+            <AgentListItem
+              agent={agent}
+              palette={P}
+              statusColors={props.statusColors}
+              spinIdx={props.spinIdx}
+              onDismiss={() => props.onDismissAgent(agent)}
+            />
+          )}
         </For>
+      </Show>
+    </box>
+  );
+}
+
+interface AgentListItemProps {
+  agent: SessionData["agents"][number];
+  palette: Accessor<Theme["palette"]>;
+  statusColors: Accessor<Theme["status"]>;
+  spinIdx: Accessor<number>;
+  onDismiss: () => void;
+}
+
+function AgentListItem(props: AgentListItemProps) {
+  const P = () => props.palette();
+  const SC = () => props.statusColors();
+  const [isDismissHover, setIsDismissHover] = createSignal(false);
+
+  const isTerminal = () => ["done", "error", "interrupted"].includes(props.agent.status);
+  const isUnseen = () => isTerminal() && props.agent.unseen === true;
+
+  const icon = () => {
+    if (isUnseen()) return UNSEEN_ICON;
+    if (isTerminal()) return props.agent.status === "done" ? "✓" : props.agent.status === "error" ? "✗" : "⚠";
+    if (props.agent.status === "running") return SPINNERS[props.spinIdx() % SPINNERS.length]!;
+    if (props.agent.status === "waiting") return "◉";
+    return "○";
+  };
+
+  const color = () => {
+    if (isTerminal()) {
+      if (props.agent.status === "error") return P().red;
+      if (props.agent.status === "interrupted") return P().peach;
+      return isUnseen() ? P().teal : P().green;
+    }
+    return SC()[props.agent.status];
+  };
+
+  const statusText = () => {
+    if (props.agent.status === "running") return "running";
+    if (props.agent.status === "done") return "done";
+    if (props.agent.status === "error") return "error";
+    if (props.agent.status === "interrupted") return "stopped";
+    if (props.agent.status === "waiting") return "waiting";
+    return "";
+  };
+
+  return (
+    <box flexDirection="column" flexShrink={0}>
+      <box height={1} />
+      <box flexDirection="row" paddingRight={1}>
+        <text flexGrow={1} truncate>
+          <span style={{ fg: color() }}>{icon()}</span>
+          <span style={{ fg: P().subtext1 }}>{" "}{props.agent.agent}</span>
+        </text>
+        <Show when={!isTerminal() || !isUnseen()}>
+          <text flexShrink={0}>
+            <span style={{ fg: color(), attributes: DIM }}>{statusText()}</span>
+          </text>
+        </Show>
+        <text
+          flexShrink={0}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            props.onDismiss();
+          }}
+          onMouseOver={() => setIsDismissHover(true)}
+          onMouseOut={() => setIsDismissHover(false)}
+        >
+          <span style={{ fg: isDismissHover() ? P().red : P().overlay0 }}>{" ✕"}</span>
+        </text>
+      </box>
+      <Show when={props.agent.threadName}>
+        <text paddingLeft={2} paddingRight={1}>
+          <span style={{ fg: isUnseen() ? color() : P().overlay0 }}>{props.agent.threadName}</span>
+        </text>
       </Show>
     </box>
   );

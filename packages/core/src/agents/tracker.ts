@@ -13,8 +13,8 @@ const STATUS_PRIORITY: Record<string, number> = {
   idle: 0,
 };
 
-function instanceKey(event: AgentEvent): string {
-  return event.threadId ? `${event.agent}:${event.threadId}` : event.agent;
+function instanceKey(agent: string, threadId?: string): string {
+  return threadId ? `${agent}:${threadId}` : agent;
 }
 
 export class AgentTracker {
@@ -30,7 +30,7 @@ export class AgentTracker {
   }
 
   applyEvent(event: AgentEvent): void {
-    const key = instanceKey(event);
+    const key = instanceKey(event.agent, event.threadId);
 
     // Store instance
     let sessionInstances = this.instances.get(event.session);
@@ -86,7 +86,7 @@ export class AgentTracker {
     if (!sessionInstances) return [];
     return [...sessionInstances.values()]
       .map((event) => {
-        const key = instanceKey(event);
+        const key = instanceKey(event.agent, event.threadId);
         const isUnseen = this.unseenInstances.has(this.unseenKey(session, key));
         return isUnseen ? { ...event, unseen: true } : event;
       })
@@ -109,6 +109,21 @@ export class AgentTracker {
       for (const key of sessionInstances.keys()) {
         this.unseenInstances.delete(this.unseenKey(session, key));
       }
+    }
+    return true;
+  }
+
+  dismiss(session: string, agent: string, threadId?: string): boolean {
+    const sessionInstances = this.instances.get(session);
+    if (!sessionInstances) return false;
+
+    const key = instanceKey(agent, threadId);
+    const removed = sessionInstances.delete(key);
+    if (!removed) return false;
+
+    this.unseenInstances.delete(this.unseenKey(session, key));
+    if (sessionInstances.size === 0) {
+      this.instances.delete(session);
     }
     return true;
   }

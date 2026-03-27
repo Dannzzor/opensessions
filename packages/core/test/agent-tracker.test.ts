@@ -100,6 +100,17 @@ describe("AgentTracker", () => {
     expect(tracker.getState("sess-1")).not.toBeNull();
   });
 
+  test("dismiss removes only the targeted agent instance", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "done", agent: "amp", threadId: "t1" }));
+    tracker.applyEvent(event({ session: "sess-1", status: "running", agent: "codex", threadId: "t2" }));
+
+    const dismissed = tracker.dismiss("sess-1", "amp", "t1");
+
+    expect(dismissed).toBe(true);
+    expect(tracker.getAgents("sess-1").map((agent) => `${agent.agent}:${agent.threadId}`)).toEqual(["codex:t2"]);
+    expect(tracker.getUnseen()).not.toContain("sess-1");
+  });
+
   // --- pruneStuck ---
 
   test("pruneStuck removes running states older than timeout", () => {

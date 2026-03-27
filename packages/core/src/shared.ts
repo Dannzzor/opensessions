@@ -71,6 +71,7 @@ export type ClientCommand =
   | { type: "move-focus"; delta: -1 | 1 }
   | { type: "focus-session"; name: string }
   | { type: "mark-seen"; name: string }
+  | { type: "dismiss-agent"; session: string; agent: string; threadId?: string }
   | { type: "set-theme"; theme: string }
   | { type: "identify"; clientTty: string }
   | { type: "report-width"; width: number }
