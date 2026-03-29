@@ -430,25 +430,9 @@ function App() {
     // Fallback: if no capability response arrives within 2s, refocus anyway
     const refocusTimeout = setTimeout(doStartupRefocus, 2000);
 
-    // When the sidebar pane regains focus (e.g. after stash restore / toggle),
-    // OpenTUI fires restoreTerminalModes which sends capability queries whose
-    // responses would leak as garbage if we move focus away too early.
-    // Wait a short interval for those responses to arrive before refocusing.
-    let postFocusRefocusTimer: ReturnType<typeof setTimeout> | null = null;
-    const onRendererFocus = () => {
-      if (!startupRefocused) return; // startup handler takes care of first focus
-      if (postFocusRefocusTimer) clearTimeout(postFocusRefocusTimer);
-      postFocusRefocusTimer = setTimeout(() => {
-        postFocusRefocusTimer = null;
-        refocusMainPane();
-      }, 200);
-    };
-    renderer.on("focus", onRendererFocus);
     onCleanup(() => {
       clearTimeout(refocusTimeout);
-      if (postFocusRefocusTimer) clearTimeout(postFocusRefocusTimer);
       renderer.removeListener("capabilities", doStartupRefocus);
-      renderer.removeListener("focus", onRendererFocus);
     });
 
     const socket = new WebSocket(`ws://${SERVER_HOST}:${SERVER_PORT}`);
