@@ -226,7 +226,9 @@ export class TmuxProvider implements MuxProviderV1, WindowCapable, SidebarCapabl
 
   hideSidebar(paneId: string): void {
     this.ensureStash();
-    // Move pane into invisible stash session (no client attached = not visible anywhere)
+    // Ensure the stash window is large enough to accept another pane.
+    // join-pane fails with "pane too small" when stash panes fill up.
+    rawTmux(["resize-window", "-t", `${STASH_SESSION}:`, "-x", "200", "-y", "200"]);
     plog("hideSidebar: stashing pane", { paneId });
     rawTmux(["join-pane", "-d", "-s", paneId, "-t", `${STASH_SESSION}:`]);
   }

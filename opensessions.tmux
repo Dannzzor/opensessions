@@ -7,14 +7,16 @@
 #   2. Press prefix + I to install
 #   3. Requires: bun (https://bun.sh)
 #
+# Default keybindings:
+#   prefix + o → s   — reveal and focus sidebar
+#   prefix + o → t   — toggle sidebar
+#   prefix + o → 1-9 — switch to visible session by index
+#
 # Options (set before TPM init):
 #   @opensessions-prefix-key        "o"  — prefix + key to enter opensessions command table
-#   @opensessions-prefix-focus-key  "s"  — command-table key to reveal and focus sidebar
-#   @opensessions-prefix-toggle-key "t"  — command-table key to toggle sidebar
-#   @opensessions-prefix-index-keys "1 2 3 4 5 6 7 8 9" — command-table keys mapped to visible sessions 1..9
-#   @opensessions-focus-global-key  ""  — optional no-prefix key to reveal and focus sidebar
-#   @opensessions-index-keys        ""  — optional no-prefix keys mapped to visible sessions 1..9
-#   @opensessions-width     "26"   — sidebar width in columns
+#   @opensessions-focus-global-key  ""   — optional no-prefix key to reveal and focus sidebar
+#   @opensessions-index-keys        ""   — optional no-prefix keys mapped to visible sessions 1..9
+#   @opensessions-width             "26" — sidebar width in columns
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$CURRENT_DIR/integrations/tmux-plugin/scripts"
@@ -30,9 +32,6 @@ get_option() {
 }
 
 PREFIX_KEY=$(get_option "@opensessions-prefix-key" "o")
-PREFIX_FOCUS_KEY=$(get_option "@opensessions-prefix-focus-key" "s")
-PREFIX_TOGGLE_KEY=$(get_option "@opensessions-prefix-toggle-key" "t")
-PREFIX_INDEX_KEYS=$(get_option "@opensessions-prefix-index-keys" "1 2 3 4 5 6 7 8 9")
 FOCUS_GLOBAL_KEY=$(get_option "@opensessions-focus-global-key" "")
 INDEX_KEYS=$(get_option "@opensessions-index-keys" "")
 WIDTH=$(get_option "@opensessions-width" "26")
@@ -45,7 +44,7 @@ bind_global_key() {
   tmux bind-key -n "$key" run-shell "$command"
 }
 
-bind_index_keys() {
+bind_global_index_keys() {
   local index=1
   local key
   for key in $INDEX_KEYS; do
@@ -53,33 +52,6 @@ bind_index_keys() {
     tmux bind-key -n "$key" run-shell "sh '$SCRIPTS_DIR/switch-index.sh' $index"
     index=$((index + 1))
   done
-}
-
-bind_table_key() {
-  local table="$1"
-  local key="$2"
-  local command="$3"
-  [ -n "$key" ] || return
-  tmux bind-key -T "$table" "$key" run-shell "$command"
-}
-
-bind_table_index_keys() {
-  local index=1
-  local key
-  for key in $PREFIX_INDEX_KEYS; do
-    [ "$index" -le 9 ] || break
-    tmux bind-key -T "$COMMAND_TABLE" "$key" run-shell "sh '$SCRIPTS_DIR/switch-index.sh' $index"
-    index=$((index + 1))
-  done
-}
-
-bind_command_table() {
-  [ -n "$PREFIX_KEY" ] || return
-  tmux bind-key "$PREFIX_KEY" switch-client -T "$COMMAND_TABLE"
-  tmux bind-key -T "$COMMAND_TABLE" Any switch-client -T root
-  bind_table_key "$COMMAND_TABLE" "$PREFIX_FOCUS_KEY" "sh '$SCRIPTS_DIR/focus.sh'"
-  bind_table_key "$COMMAND_TABLE" "$PREFIX_TOGGLE_KEY" "sh '$SCRIPTS_DIR/toggle.sh'"
-  bind_table_index_keys
 }
 
 # Export so scripts can read them
@@ -95,6 +67,26 @@ if [ ! -d "$CURRENT_DIR/node_modules" ]; then
 fi
 
 # --- Bind tmux shortcuts ---
-bind_command_table
+
+# Command table for manual use: prefix o → s/t/1-9
+if [ -n "$PREFIX_KEY" ]; then
+  tmux bind-key "$PREFIX_KEY" switch-client -T "$COMMAND_TABLE"
+  tmux bind-key -T "$COMMAND_TABLE" Any switch-client -T root
+  tmux bind-key -T "$COMMAND_TABLE" s run-shell "sh '$SCRIPTS_DIR/focus.sh'"
+  tmux bind-key -T "$COMMAND_TABLE" t run-shell "sh '$SCRIPTS_DIR/toggle.sh'"
+  for i in 1 2 3 4 5 6 7 8 9; do
+    tmux bind-key -T "$COMMAND_TABLE" "$i" run-shell "sh '$SCRIPTS_DIR/switch-index.sh' $i"
+  done
+fi
+
+# Direct prefix bindings for programmatic use (terminal emulator shortcuts).
+# C-s/C-t are single-byte Ctrl codes; M-1..9 are 2-byte Alt sequences.
+# Both are safe to send as text from terminal emulators without timing issues.
+tmux bind-key C-s run-shell "sh '$SCRIPTS_DIR/focus.sh'"
+tmux bind-key C-t run-shell "sh '$SCRIPTS_DIR/toggle.sh'"
+for i in 1 2 3 4 5 6 7 8 9; do
+  tmux bind-key "M-$i" run-shell "sh '$SCRIPTS_DIR/switch-index.sh' $i"
+done
+
 bind_global_key "$FOCUS_GLOBAL_KEY" "sh '$SCRIPTS_DIR/focus.sh'"
-bind_index_keys
+bind_global_index_keys

@@ -1,6 +1,6 @@
 # Get Started In tmux
 
-This tutorial gets opensessions running as a real tmux sidebar, either through TPM or from a local clone. By the end, you will be able to press `prefix s` to open the sidebar, jump into it with `prefix S`, switch directly with `prefix o 1` through `prefix o 9`, and see agent and Git state update live.
+This tutorial gets opensessions running as a real tmux sidebar, either through TPM or from a local clone. By the end, you will be able to press `prefix o → s` to open the sidebar, toggle it with `prefix o → t`, switch directly with `prefix o → 1` through `prefix o → 9`, and see agent and Git state update live.
 
 ## Prerequisites
 
@@ -53,14 +53,13 @@ tmux source-file ~/.tmux.conf
 ~/.tmux/plugins/tpm/bin/install_plugins
 ```
 
-All `@opensessions-*` tmux options already have defaults. Add overrides only when you want different keys or width, for example:
+All `@opensessions-*` tmux options already have defaults. Add overrides only when you want different width or global keys, for example:
 
 ```tmux
-set -g @opensessions-prefix-key "g"
 set -g @opensessions-width "30"
 ```
 
-Result: tmux knows how to toggle the sidebar, how to reveal and focus it directly, and how to enter an opensessions command table for quick direct switching.
+Result: tmux registers direct prefix bindings for sidebar toggle, focus, and session switching.
 
 ## 4. Reload tmux configuration
 
@@ -80,9 +79,9 @@ Result: the new keybinding is active in your current tmux server.
 
 Recommended shortcut scheme:
 
-- `prefix o s` reveals and focuses the sidebar pane.
-- `prefix o t` toggles the sidebar.
-- `prefix o 1` through `prefix o 9` switch directly to the visible session indices.
+- `prefix o → s` reveals and focuses the sidebar pane.
+- `prefix o → t` toggles the sidebar.
+- `prefix o → 1` through `prefix o → 9` switch directly to the visible session indices.
 
 If you use a terminal or window manager setup where no-prefix bindings are safe, you can also set `@opensessions-focus-global-key` and `@opensessions-index-keys`, but they are left unset by default to avoid conflicts.
 
@@ -91,10 +90,10 @@ If you use a terminal or window manager setup where no-prefix bindings are safe,
 Inside tmux, press:
 
 ```text
-prefix o s
+prefix o → s
 ```
 
-Result: tmux enters the opensessions command table and then reveals and focuses the sidebar. If the server is not running yet, the helper script starts it first.
+Result: tmux reveals and focuses the sidebar. If the server is not running yet, the helper script starts it first.
 
 ## 6. Verify the sidebar is live
 

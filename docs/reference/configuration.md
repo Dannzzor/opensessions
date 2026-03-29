@@ -82,13 +82,18 @@ The tmux integration reads these tmux options instead of `config.json`:
 
 | tmux option | Default | Used by |
 | --- | --- | --- |
-| `@opensessions-prefix-key` | `o` | Prefix key that opens the `opensessions` command table for the next keypress |
-| `@opensessions-prefix-focus-key` | `s` | Command-table key that reveals and focuses the sidebar pane |
-| `@opensessions-prefix-toggle-key` | `t` | Command-table key that toggles the sidebar |
-| `@opensessions-prefix-index-keys` | `1 2 3 4 5 6 7 8 9` | Space-separated command-table keys mapped in order to visible sessions `1` through `9` |
+| `@opensessions-prefix-key` | `o` | Key after the tmux prefix that enters the opensessions key table (`prefix <key>`) |
 | `@opensessions-focus-global-key` | unset | Optional no-prefix tmux keybinding that reveals and focuses the sidebar pane |
 | `@opensessions-index-keys` | unset | Optional space-separated no-prefix tmux keys mapped in order to visible sessions `1` through `9` |
 | `@opensessions-width` | `26` | exported as `OPENSESSIONS_WIDTH` by the tmux bootstrap script |
+
+The plugin registers these prefix bindings automatically:
+
+| Binding | Action |
+| --- | --- |
+| `prefix o → s` | Reveal and focus the sidebar |
+| `prefix o → t` | Toggle the sidebar |
+| `prefix o → 1` through `prefix o → 9` | Switch to visible session by index |
 
 Minimal install:
 
@@ -114,20 +119,13 @@ source-file /absolute/path/to/opensessions/opensessions.tmux
 Optional overrides:
 
 ```tmux
-set -g @opensessions-prefix-key "g"
 set -g @opensessions-width "30"
+set -g @opensessions-prefix-key "o"   # default; change to remap the opensessions key table
 ```
 
 All other tmux options fall back to the defaults shown in the table above.
 
-Recommended mapping:
-
-- Keep `@opensessions-prefix-key` on `o` so `prefix o` becomes an opensessions mini-leader.
-- Keep `@opensessions-prefix-focus-key` on `s` and `@opensessions-prefix-toggle-key` on `t` so the defaults read as `prefix o s` and `prefix o t`.
-- Keep `@opensessions-prefix-index-keys` on `1` through `9` so `prefix o 1` through `prefix o 9` jump to the same visible indices shown in the sidebar.
 - Use `@opensessions-focus-global-key` and `@opensessions-index-keys` only when you explicitly want no-prefix tmux bindings and know they do not conflict with your window manager or terminal.
-
-If you rely on tmux's built-in `prefix o` pane-cycling command, set `@opensessions-prefix-key` to another key such as `g` or set it to an empty string to disable the opensessions command table.
 
 ## Environment Variables
 

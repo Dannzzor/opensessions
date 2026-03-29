@@ -75,9 +75,9 @@ Clicking a detected port opens `http://localhost:<port>`.
 
 | Key | Action |
 | --- | --- |
-| `prefix o s` by default | Reveal and focus the sidebar pane through the opensessions command table |
-| `prefix o t` by default | Toggle the sidebar through the opensessions command table |
-| `prefix o 1` through `prefix o 9` by default | Switch directly to the visible session indices |
+| `prefix o → s` | Reveal and focus the sidebar pane |
+| `prefix o → t` | Toggle the sidebar |
+| `prefix o → 1` through `prefix o → 9` | Switch directly to the visible session indices |
 | Configurable `@opensessions-focus-global-key` such as `Alt-s` | Reveal and focus the sidebar pane from any tmux pane |
 | Configurable `@opensessions-index-keys` such as `Alt-1` through `Alt-9` | Switch directly to the visible session indices from any tmux pane |
 

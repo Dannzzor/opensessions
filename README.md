@@ -31,7 +31,7 @@ tmux source-file ~/.tmux.conf
 ~/.tmux/plugins/tpm/bin/install_plugins
 ```
 
-Open the sidebar with `prefix o` then `s`.
+Open the sidebar with `prefix o → s`.
 
 TPM clones the repo into `~/.tmux/plugins/opensessions`. It does not install a standalone `opensessions` binary. `opensessions` runs from that checkout with your local `bun` installation.
 
@@ -53,7 +53,7 @@ grep -q "Ataraxy-Labs/opensessions" ~/.tmux.conf 2>/dev/null || printf '\nset -g
 - Per-thread unseen markers for `done`, `error`, and `interrupted` states.
 - Session context in the UI: branch in the list, working directory in the detail panel, thread names, and detected localhost ports.
 - Fast switching with `j`/`k`, arrows, `Tab`, `1`-`9`, session reordering, hide/restore, creation, and kill actions.
-- A tmux command table on `prefix o`, optional no-prefix shortcuts, in-app theme switching, and plugin hooks for more mux providers or watchers.
+- `prefix o → s` and `prefix o → t` for sidebar focus and toggle, `prefix o → 1` through `9` for quick switching, optional no-prefix shortcuts, in-app theme switching, and plugin hooks for more mux providers or watchers.
 - Bun workspace, source-first execution, and a local server on `127.0.0.1:7391`.
 
 ## Local Development
@@ -75,6 +75,7 @@ For the full tmux workflow with keybindings, troubleshooting, and configuration 
 ## Docs
 
 - [Get started in tmux](./docs/tutorials/get-started-in-tmux.md)
+- [Set up Ghostty shortcuts](./docs/how-to/set-up-ghostty-shortcuts.md)
 - [Configuration reference](./docs/reference/configuration.md)
 - [Features and keybindings reference](./docs/reference/features-and-keybindings.md)
 - [Architecture explanation](./docs/explanation/architecture.md)
