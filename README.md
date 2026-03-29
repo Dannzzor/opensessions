@@ -62,9 +62,37 @@ Then remove the `set -g @plugin 'Ataraxy-Labs/opensessions'` line from `~/.tmux.
 - Live agent state across sessions for Amp, Claude Code, Codex, and OpenCode.
 - Per-thread unseen markers for `done`, `error`, and `interrupted` states.
 - Session context in the UI: branch in the list, working directory in the detail panel, thread names, and detected localhost ports.
+- Programmatic metadata API: agents and scripts push status, progress, and logs to the sidebar via HTTP.
 - Fast switching with `j`/`k`, arrows, `Tab`, `1`-`9`, session reordering, hide/restore, creation, and kill actions.
 - `prefix o → s` and `prefix o → t` for sidebar focus and toggle, `prefix o → 1` through `9` for quick switching, optional no-prefix shortcuts, in-app theme switching, and plugin hooks for more mux providers or watchers.
 - Bun workspace, source-first execution, and a local server on `127.0.0.1:7391`.
+
+## Programmatic API
+
+Scripts and agents can push custom metadata to the sidebar over HTTP — no binary needed:
+
+```sh
+# Set a status pill on a session
+curl -X POST http://127.0.0.1:7391/set-status \
+  -H 'content-type: application/json' \
+  -d '{"session":"my-app","text":"Deploying","tone":"warn"}'
+
+# Set progress
+curl -X POST http://127.0.0.1:7391/set-progress \
+  -H 'content-type: application/json' \
+  -d '{"session":"my-app","current":3,"total":10,"label":"services"}'
+
+# Push a log entry
+curl -X POST http://127.0.0.1:7391/log \
+  -H 'content-type: application/json' \
+  -d '{"session":"my-app","message":"Tests passed","source":"ci","tone":"success"}'
+```
+
+Endpoints: `/set-status`, `/set-progress`, `/log`, `/clear-log`, `/notify`
+
+Tones: `neutral`, `info`, `success`, `warn`, `error` — each with a distinct icon and color.
+
+Full reference: [docs/reference/programmatic-api.md](./docs/reference/programmatic-api.md)
 
 ## Local Development
 
@@ -88,6 +116,7 @@ For the full tmux workflow with keybindings, troubleshooting, and configuration 
 - [Set up Ghostty shortcuts](./docs/how-to/set-up-ghostty-shortcuts.md)
 - [Configuration reference](./docs/reference/configuration.md)
 - [Features and keybindings reference](./docs/reference/features-and-keybindings.md)
+- [Programmatic API reference](./docs/reference/programmatic-api.md)
 - [Architecture explanation](./docs/explanation/architecture.md)
 - [Contracts and extension interfaces](./CONTRACTS.md)
 - [Plugin authoring guide](./PLUGINS.md)
