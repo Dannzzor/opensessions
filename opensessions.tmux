@@ -58,6 +58,12 @@ bind_global_index_keys() {
 tmux set-environment -g OPENSESSIONS_DIR "$CURRENT_DIR"
 tmux set-environment -g OPENSESSIONS_WIDTH "$WIDTH"
 
+# --- Bootstrap: kill stale server so it restarts with updated code ---
+if [ -f /tmp/opensessions.pid ]; then
+  kill "$(cat /tmp/opensessions.pid)" 2>/dev/null || true
+  rm -f /tmp/opensessions.pid
+fi
+
 # --- Bootstrap: install deps if needed ---
 if [ ! -d "$CURRENT_DIR/node_modules" ]; then
   BUN_PATH="$(command -v bun 2>/dev/null || echo "$HOME/.bun/bin/bun")"
