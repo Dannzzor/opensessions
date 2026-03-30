@@ -1424,6 +1424,19 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
         break;
       case "kill-session": {
         const p = sessionProviders.get(cmd.name) ?? mux;
+        // If killing the current session, switch to the adjacent session in sidebar order
+        const currentBefore = getCurrentSession();
+        if (currentBefore === cmd.name) {
+          const allNames = p.listSessions().map((s) => s.name);
+          const visible = sessionOrder.apply(allNames);
+          const idx = visible.indexOf(cmd.name);
+          // Prefer the session before, then after, in sidebar order
+          const fallback = visible[idx - 1] ?? visible[idx + 1];
+          if (fallback) {
+            const tty = clientTtyBySession.get(cmd.name);
+            p.switchSession(fallback, tty);
+          }
+        }
         p.killSession(cmd.name);
         broadcastState();
         break;
