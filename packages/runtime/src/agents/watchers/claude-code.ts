@@ -9,6 +9,58 @@
  * Encoded path: /Users/foo/myproject → -Users-foo-myproject
  *
  * All file I/O is async to avoid blocking the server event loop.
+ *
+ * ## Claude Code JSONL Lifecycle (observed v2.1.87)
+ *
+ * Each JSONL file represents one Claude Code session. Entries are appended
+ * as the session progresses. The top-level `type` field determines the
+ * entry category:
+ *
+ * ### Control entries (no message.role — SKIP, do not change status)
+ *   - `queue-operation`       — enqueue/dequeue markers for headless/queued prompts
+ *   - `file-history-snapshot` — file state snapshot between turns (interactive mode)
+ *   - `last-prompt`           — written at end of headless `--print` sessions
+ *
+ * ### Message entries (have message.role)
+ *   - `user`      role=user      — user prompt OR tool_result OR interrupt marker
+ *   - `assistant`  role=assistant — model response (streamed as multiple entries)
+ *
+ * ### Assistant streaming: one API turn → multiple JSONL entries
+ *   Claude Code splits each assistant turn into separate entries:
+ *     1. `thinking`  entry (content=[{type:"thinking"}], stop_reason=null)
+ *     2. `text`      entry (content=[{type:"text"}], stop_reason=null)  — partial
+ *     3. `tool_use`  entry (content=[{type:"tool_use"}], stop_reason="tool_use"|null)
+ *     4. `text`      entry (content=[{type:"text"}], stop_reason="end_turn") — final
+ *   Not all entries appear in every turn. Multi-tool calls produce separate entries
+ *   (first with stop=null, last with stop="tool_use").
+ *
+ * ### Status mapping:
+ *   - assistant + content has tool_use  → "running"  (tool call in progress)
+ *   - assistant + content has thinking  → "running"  (model is reasoning)
+ *   - assistant + stop_reason=null      → "running"  (streaming, more entries coming)
+ *   - assistant + stop_reason=end_turn  → "done"     (turn complete)
+ *   - user + content is tool_result     → "running"  (tool executed, next turn coming)
+ *   - user + text matches interrupt     → "interrupted" (user pressed Esc or Ctrl+C)
+ *   - user + text matches /exit command → "done"     (user quit the session)
+ *   - user + normal text                → "running"  (new prompt submitted)
+ *
+ * ### Termination scenarios:
+ *   - Normal completion: last entry is assistant with stop_reason="end_turn"
+ *   - Headless completion: same, followed by `last-prompt` (ignored)
+ *   - User interrupt (Escape): writes user entry with "[Request interrupted by user...]"
+ *   - SIGINT (Ctrl+C): writes `last-prompt` then user with "[Request interrupted by user]"
+ *   - SIGKILL / crash: NO entry written — file just stops growing
+ *   - /exit command: writes user entries with XML command markup
+ *   - Idle between turns: last entry is assistant stop=end_turn or file-history-snapshot
+ *
+ * ### Permission prompt detection:
+ *   When Claude awaits permission, the last entry is assistant with tool_use
+ *   and the file stops growing. After TOOL_USE_WAIT_MS with no growth,
+ *   we promote "running" → "waiting".
+ *
+ * ### Stuck process detection:
+ *   If status is "running" or "waiting" and the file hasn't grown for
+ *   STUCK_RUNNING_MS, we assume the process died and emit "done".
  */
 
 import { watch, type FSWatcher } from "fs";
@@ -29,6 +81,7 @@ interface JournalEntry {
   type?: string;
   message?: {
     role?: string;
+    stop_reason?: string | null;
     content?: ContentItem[] | string;
   };
 }
@@ -40,23 +93,40 @@ interface SessionState {
   projectDir?: string;
   /** Timestamp when status first became "running" from a tool_use entry */
   toolUseSeenAt?: number;
+  /** Timestamp when the file was last observed to have grown (for stuck detection) */
+  lastGrowthAt?: number;
 }
 
 const POLL_MS = 2000;
 const STALE_MS = 5 * 60 * 1000;
 /** How long to wait before promoting tool_use "running" → "waiting" (permission prompt heuristic) */
 const TOOL_USE_WAIT_MS = 3000;
+/** How long a "running" session can go without file growth before we assume the process died */
+const STUCK_RUNNING_MS = 15_000;
+
+// --- Interrupt / exit detection patterns ---
+
+const INTERRUPT_PATTERNS = [
+  "[Request interrupted by user",
+  "[Request interrupted",
+];
+
+const EXIT_COMMAND_PATTERN = "<command-name>/exit</command-name>";
+/** Slash commands like /vim, /clear, /model write entries with XML markup — not agent activity */
+const SLASH_COMMAND_PATTERN = "<command-name>/";
+const LOCAL_COMMAND_CAVEAT = "<local-command-caveat>";
 
 // --- Status detection ---
 
 /**
  * Returns the status implied by a journal entry, or `null` if the entry
- * is a control/metadata record (e.g. `queue-operation`, `file-history-snapshot`,
- * `last-prompt`) that should not change the current status.
+ * is a control/metadata record that should not change the current status.
+ *
+ * Control entries (no message.role): queue-operation, file-history-snapshot, last-prompt
  */
 export function determineStatus(entry: JournalEntry): AgentStatus | null {
   const msg = entry.message;
-  if (!msg?.role) return null; // control entry — skip
+  if (!msg?.role) return null;
 
   const content = msg.content;
   const items: ContentItem[] = Array.isArray(content)
@@ -66,17 +136,42 @@ export function determineStatus(entry: JournalEntry): AgentStatus | null {
       : [];
 
   if (msg.role === "assistant") {
-    const hasToolUse = items.some((c) => c.type === "tool_use");
-    if (hasToolUse) return "running";
-    // thinking-only entries (extended thinking) mean the model is still working
-    const hasThinking = items.some((c) => c.type === "thinking");
-    if (hasThinking) return "running";
+    // tool_use → running (tool call pending or executing)
+    if (items.some((c) => c.type === "tool_use")) return "running";
+    // thinking → running (model is reasoning, more entries will follow)
+    if (items.some((c) => c.type === "thinking")) return "running";
+    // Streaming partial (stop_reason is null/absent) → still running
+    if (!msg.stop_reason) return "running";
+    // Finished turn
+    if (msg.stop_reason === "end_turn") return "done";
+    // tool_use stop_reason without tool_use content = edge case, treat as running
+    if (msg.stop_reason === "tool_use") return "running";
+    // Any other stop reason (max_tokens, etc.)
     return "done";
   }
 
-  if (msg.role === "user") return "running";
+  if (msg.role === "user") {
+    // Check for interrupt markers written by Escape/SIGINT
+    const text = typeof content === "string"
+      ? content
+      : items.find((c) => c.type === "text" && c.text)?.text;
 
-  return null; // unknown role — skip
+    if (text) {
+      if (INTERRUPT_PATTERNS.some((p) => text.startsWith(p))) return "interrupted";
+      // /exit command → done
+      if (text.includes(EXIT_COMMAND_PATTERN)) return "done";
+      // Slash commands (/vim, /clear, /model, etc.) and their caveats → skip
+      if (text.includes(SLASH_COMMAND_PATTERN) || text.startsWith(LOCAL_COMMAND_CAVEAT)) return null;
+    }
+
+    // tool_result → running (tool just executed, next turn coming)
+    if (items.some((c) => c.type === "tool_result")) return "running";
+
+    // Normal user message → running (new prompt)
+    return "running";
+  }
+
+  return null;
 }
 
 /** Returns true if the entry is an assistant message containing a tool_use block */
@@ -102,8 +197,8 @@ function extractThreadName(entry: JournalEntry): string | undefined {
   }
 
   if (!text) return undefined;
-  // Skip system/internal messages
-  if (text.startsWith("<") || text.startsWith("{")) return undefined;
+  // Skip system/internal messages, interrupt markers, and command outputs
+  if (text.startsWith("<") || text.startsWith("{") || text.startsWith("[Request")) return undefined;
   return text.slice(0, 80);
 }
 
@@ -143,6 +238,21 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
     this.ctx = null;
   }
 
+  /** Emit a status change event if we have a valid session mapping */
+  private emitStatus(threadId: string, state: SessionState): void {
+    if (!this.ctx || !this.seeded || !state.projectDir) return;
+    const session = this.ctx.resolveSession(state.projectDir);
+    if (!session) return;
+    this.ctx.emit({
+      agent: "claude-code",
+      session,
+      status: state.status,
+      ts: Date.now(),
+      threadId,
+      threadName: state.threadName,
+    });
+  }
+
   private async processFile(filePath: string, projectDir: string): Promise<void> {
     if (!this.ctx) return;
 
@@ -152,29 +262,29 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
     const threadId = basename(filePath, ".jsonl");
     const prev = this.sessions.get(threadId);
 
+    // --- File unchanged ---
     if (prev && size === prev.fileSize) {
-      // File unchanged — check if we should promote tool_use "running" → "waiting"
-      if (prev.status === "running" && prev.toolUseSeenAt && Date.now() - prev.toolUseSeenAt >= TOOL_USE_WAIT_MS) {
+      const now = Date.now();
+
+      // Promote tool_use "running" → "waiting" (permission prompt heuristic)
+      if (prev.status === "running" && prev.toolUseSeenAt && now - prev.toolUseSeenAt >= TOOL_USE_WAIT_MS) {
         prev.status = "waiting";
         prev.toolUseSeenAt = undefined;
-        if (this.seeded && prev.projectDir) {
-          const session = this.ctx.resolveSession(prev.projectDir);
-          if (session) {
-            this.ctx.emit({
-              agent: "claude-code",
-              session,
-              status: "waiting",
-              ts: Date.now(),
-              threadId,
-              threadName: prev.threadName,
-            });
-          }
-        }
+        this.emitStatus(threadId, prev);
       }
+
+      // Stuck detection: no file growth while running/waiting → assume process died
+      if ((prev.status === "running" || prev.status === "waiting") && prev.lastGrowthAt && now - prev.lastGrowthAt >= STUCK_RUNNING_MS) {
+        prev.status = "done";
+        prev.toolUseSeenAt = undefined;
+        prev.lastGrowthAt = undefined;
+        this.emitStatus(threadId, prev);
+      }
+
       return;
     }
 
-    // Seed mode: read last entry to capture real status for post-seed emit
+    // --- Seed mode: read full file to capture current status ---
     if (!this.seeded) {
       let text: string;
       try {
@@ -201,10 +311,12 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
       this.sessions.set(threadId, {
         status: latestStatus, fileSize: size, threadName, projectDir,
         toolUseSeenAt: lastEntryIsToolUse && latestStatus === "running" ? Date.now() : undefined,
+        lastGrowthAt: (latestStatus === "running" || latestStatus === "waiting") ? Date.now() : undefined,
       });
       return;
     }
 
+    // --- Incremental read: only new bytes ---
     const offset = prev?.fileSize ?? 0;
     if (size <= offset) return;
 
@@ -236,21 +348,12 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
     }
 
     const prevStatus = prev?.status;
-    const toolUseSeenAt = lastEntryIsToolUse && latestStatus === "running" ? Date.now() : undefined;
-    this.sessions.set(threadId, { status: latestStatus, fileSize: size, threadName, projectDir, toolUseSeenAt });
+    const now = Date.now();
+    const toolUseSeenAt = lastEntryIsToolUse && latestStatus === "running" ? now : undefined;
+    this.sessions.set(threadId, { status: latestStatus, fileSize: size, threadName, projectDir, toolUseSeenAt, lastGrowthAt: now });
 
     if (latestStatus !== prevStatus) {
-      const session = this.ctx.resolveSession(projectDir);
-      if (session) {
-        this.ctx.emit({
-          agent: "claude-code",
-          session,
-          status: latestStatus,
-          ts: Date.now(),
-          threadId,
-          threadName,
-        });
-      }
+      this.emitStatus(threadId, this.sessions.get(threadId)!);
     }
   }
 
