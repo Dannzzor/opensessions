@@ -8,6 +8,7 @@ import type { AgentWatcher, AgentWatcherContext } from "../contracts/agent-watch
 import { AgentTracker, instanceKey } from "../agents/tracker";
 import { SessionOrder } from "./session-order";
 import { SessionMetadataStore } from "./metadata-store";
+import { buildLocalLinks, loadPortlessState } from "./portless";
 import { loadConfig, saveConfig } from "../config";
 import {
   clampSidebarWidth,
@@ -443,6 +444,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     const orderedNames = sessionOrder.apply(allMuxSessions.map((s) => s.name));
     const sessionByName = new Map(allMuxSessions.map((s) => [s.name, s]));
     const orderedMuxSessions = orderedNames.map((n) => sessionByName.get(n)!);
+    const portlessState = loadPortlessState();
 
     // Batch pane counts per provider (uses BatchCapable type guard)
     const paneCountMaps = new Map<MuxProvider, Map<string, number>>();
@@ -479,6 +481,7 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
         unseen: tracker.isUnseen(name),
         panes,
         ports: getSessionPorts(name),
+        localLinks: buildLocalLinks(getSessionPorts(name), portlessState),
         windows,
         uptime,
         agentState: tracker.getState(name),

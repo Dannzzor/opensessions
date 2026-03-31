@@ -156,7 +156,7 @@ describe("Themes", () => {
   });
 
   test("every builtin theme has all status colors", () => {
-    const statuses = ["idle", "running", "done", "error", "waiting", "interrupted"];
+    const statuses = ["idle", "running", "tool-running", "done", "error", "waiting", "interrupted", "stale"];
     for (const [name, theme] of Object.entries(BUILTIN_THEMES)) {
       for (const s of statuses) {
         expect(theme.status).toHaveProperty(s);

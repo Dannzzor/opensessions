@@ -389,7 +389,7 @@ describe("CodexAgentWatcher", () => {
     expect(interruptedEvents.length).toBe(0);
   });
 
-  test("detects stuck running and promotes to done (process death)", async () => {
+  test("detects stuck running and promotes to stale (process death)", async () => {
     watcher.start(ctx);
     await new Promise((resolve) => setTimeout(resolve, 200));
     const seedCount = events.length;
@@ -401,8 +401,8 @@ describe("CodexAgentWatcher", () => {
     // Wait for next poll cycle to detect stuck
     await new Promise((r) => setTimeout(r, 2500));
 
-    const doneEvents = events.slice(seedCount).filter((e) => e.status === "done");
-    expect(doneEvents.length).toBeGreaterThanOrEqual(1);
+    const staleEvents = events.slice(seedCount).filter((e) => e.status === "stale");
+    expect(staleEvents.length).toBeGreaterThanOrEqual(1);
   }, 10_000);
 
   test("promotes tool_use running to waiting after timeout", async () => {

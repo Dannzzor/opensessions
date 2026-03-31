@@ -37,8 +37,10 @@
  *     (Escape key or new message while streaming)
  *
  * ### User messages
- *   - role=user with content=[tool_result]  → "running"
- *     (tool just executed, next assistant turn coming)
+ *   - role=user with content=[tool_result], run.status=in-progress
+ *     → "tool-running" (tool is actively executing, including subagents)
+ *   - role=user with content=[tool_result], run.status=done|error|cancelled
+ *     → "running" (tool finished, next assistant turn coming)
  *   - role=user with content=[text]  → "running"
  *     (new prompt submitted)
  *   - role=user with interrupted=true  → "running"
@@ -53,8 +55,11 @@
  *      (content grows: thinking → text → tool_use)
  *   5a. Complete: state.type=complete, stopReason=end_turn → "done"
  *   5b. Tool call: state.type=complete, stopReason=tool_use → "running"
- *   6. Tool result: role=user, content=[tool_result] → "running"
- *   7. Repeat from step 4 for next turn
+ *   6. Tool starts: role=user, content=[tool_result], run.status=in-progress
+ *      → "tool-running"
+ *   7. Tool finishes: same message rewritten with run.status=done|error|cancelled
+ *      → "running" (next assistant turn coming)
+ *   8. Repeat from step 4 for next turn
  *
  * ### Interrupt scenarios
  *   - User presses Escape or sends new message while streaming:
@@ -62,18 +67,26 @@
  *     (with interrupted=true if it was a new prompt)
  *   - cancelled is the LAST message: thread was abandoned mid-stream
  *
+ * ### Waiting / paused detection
+ *   Amp can sit quietly between tool phases without being finished:
+ *   - assistant state.type=complete + stopReason=tool_use
+ *   - user content=[tool_result]
+ *   After TOOL_WAIT_MS (3s) of no thread-file growth in either shape,
+ *   we promote "running" → "waiting" instead of immediately marking it stale.
+ *
  * ### Process death (SIGKILL / crash)
  *   - Thread file stops being updated. Last message stays in whatever
  *     state it was: typically state.type=streaming (killed mid-generation)
  *     or role=user with tool_result (killed between turns).
- *   - The file mtime stops advancing. After STUCK_MS (15s) of no
- *     mtime changes while in a "running" state, we emit "done".
+ *   - The file mtime stops advancing. After STUCK_RUNNING_MS (2m) of
+ *     no mtime changes while in an actively generating or waiting state,
+ *     we emit "stale".
  *
  * ### session.json
  *   Contains { lastThreadId, lastExecuteThreadId, agentMode, ... }.
  *   When lastThreadId changes, the user focused a different thread
  *   in the Amp UI. If that thread was in a terminal state (done/error/
- *   interrupted), we emit "idle" to clear the unseen flag.
+ *   interrupted/stale), we emit "idle" to clear the unseen flag.
  */
 
 import { watch, type FSWatcher } from "fs";
@@ -99,6 +112,9 @@ interface Message {
 
 interface ContentItem {
   type?: string;
+  run?: {
+    status?: string;
+  };
 }
 
 interface ThreadSnapshot {
@@ -109,12 +125,16 @@ interface ThreadSnapshot {
   mtimeMs: number;
   /** Timestamp when we last saw the file grow (mtime advance). For stuck detection. */
   lastGrowthAt?: number;
+  /** Whether this running snapshot represents a quiet tool boundary that should become waiting before terminalizing. */
+  waitingEligible?: boolean;
 }
 
 const STALE_MS = 5 * 60 * 1000;
 const POLL_MS = 2000;
-/** How long a "running" thread can go without file growth before we assume the process died */
-const STUCK_MS = 15_000;
+/** How long to wait before promoting quiet tool boundaries from running → waiting */
+const TOOL_WAIT_MS = 3_000;
+/** How long Amp can stay quiet before we consider the thread stale */
+const STUCK_RUNNING_MS = 2 * 60 * 1000;
 
 // --- Status detection ---
 
@@ -127,7 +147,10 @@ const STUCK_MS = 15_000;
 export function determineStatus(lastMsg: { role?: string; state?: MessageState; interrupted?: boolean; content?: ContentItem[] | string } | null): AgentStatus {
   if (!lastMsg?.role) return "idle";
 
-  if (lastMsg.role === "user") return "running";
+  if (lastMsg.role === "user") {
+    if (hasToolResultRunStatus(lastMsg.content, "in-progress")) return "tool-running";
+    return "running";
+  }
 
   if (lastMsg.role === "assistant") {
     const state = lastMsg.state;
@@ -148,6 +171,28 @@ export function determineStatus(lastMsg: { role?: string; state?: MessageState; 
   }
 
   return "idle";
+}
+
+function hasContentType(content: Message["content"], type: string): boolean {
+  return Array.isArray(content) && content.some((item) => item?.type === type);
+}
+
+function hasToolResultRunStatus(content: Message["content"], status: string): boolean {
+  return Array.isArray(content) && content.some((item) => item?.type === "tool_result" && item.run?.status === status);
+}
+
+function isWaitingCandidate(lastMsg: Message | null): boolean {
+  if (!lastMsg) return false;
+
+  if (lastMsg.role === "assistant") {
+    return lastMsg.state?.type === "complete" && lastMsg.state.stopReason === "tool_use";
+  }
+
+  if (lastMsg.role === "user") {
+    return hasContentType(lastMsg.content, "tool_result") && !hasToolResultRunStatus(lastMsg.content, "in-progress");
+  }
+
+  return false;
 }
 
 // --- Async thread file parsing ---
@@ -239,12 +284,24 @@ export class AmpAgentWatcher implements AgentWatcher {
 
     // Quick mtime check — skip if file hasn't changed since we last saw this version
     if (prev && fileStat.mtimeMs <= prev.mtimeMs) {
-      // File unchanged — check for stuck detection
-      if (this.seeded && prev.status === "running" && prev.lastGrowthAt && now - prev.lastGrowthAt >= STUCK_MS) {
-        prev.status = "done";
-        prev.lastGrowthAt = undefined;
+      if (!this.seeded) return false;
+
+      if (prev.status === "running" && prev.waitingEligible && prev.lastGrowthAt && now - prev.lastGrowthAt >= TOOL_WAIT_MS) {
+        prev.status = "waiting";
+        prev.waitingEligible = false;
         this.emitStatus(threadId, prev);
+        return true;
       }
+
+      // File unchanged while actively running or already waiting — mark stale.
+      if ((prev.status === "tool-running" || prev.status === "waiting" || (prev.status === "running" && !prev.waitingEligible)) && prev.lastGrowthAt && now - prev.lastGrowthAt >= STUCK_RUNNING_MS) {
+        prev.status = "stale";
+        prev.lastGrowthAt = undefined;
+        prev.waitingEligible = false;
+        this.emitStatus(threadId, prev);
+        return true;
+      }
+
       return false;
     }
 
@@ -252,6 +309,7 @@ export class AmpAgentWatcher implements AgentWatcher {
     if (!parsed) return false;
 
     const status = determineStatus(parsed.lastMessage);
+    const waitingEligible = status === "running" && isWaitingCandidate(parsed.lastMessage);
     const statusChanged = prev?.status !== status;
     const titleChanged = prev?.title !== parsed.title;
     const projectDirChanged = prev?.projectDir !== parsed.projectDir;
@@ -259,7 +317,8 @@ export class AmpAgentWatcher implements AgentWatcher {
     if (prev && parsed.version === prev.version && !statusChanged && !titleChanged && !projectDirChanged) {
       // Update mtime even if version unchanged to avoid re-reading
       prev.mtimeMs = fileStat.mtimeMs;
-      if (prev.status === "running") prev.lastGrowthAt = now;
+      if (prev.status === "running" || prev.status === "tool-running" || prev.status === "waiting") prev.lastGrowthAt = now;
+      prev.waitingEligible = waitingEligible;
       return false;
     }
 
@@ -269,7 +328,8 @@ export class AmpAgentWatcher implements AgentWatcher {
       title: parsed.title,
       projectDir: parsed.projectDir,
       mtimeMs: fileStat.mtimeMs,
-      lastGrowthAt: status === "running" ? now : undefined,
+      lastGrowthAt: (status === "running" || status === "tool-running") ? now : undefined,
+      waitingEligible,
     };
     this.threads.set(threadId, snapshot);
 
@@ -348,7 +408,7 @@ export class AmpAgentWatcher implements AgentWatcher {
       // If this thread is tracked and in a terminal state, the user just "saw" it
       const snapshot = this.threads.get(threadId);
       if (!snapshot || !snapshot.projectDir) return;
-      if (snapshot.status !== "done" && snapshot.status !== "error" && snapshot.status !== "interrupted") return;
+      if (snapshot.status !== "done" && snapshot.status !== "error" && snapshot.status !== "interrupted" && snapshot.status !== "stale") return;
 
       const muxSession = this.ctx.resolveSession(snapshot.projectDir);
       if (!muxSession || muxSession === "unknown") return;

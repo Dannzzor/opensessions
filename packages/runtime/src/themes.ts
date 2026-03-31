@@ -42,12 +42,12 @@ const CATPPUCCIN_MOCHA: Theme = {
     base: "#1e1e2e", mantle: "#181825", crust: "#11111b",
   },
   status: {
-    idle: "#585b70", running: "#f9e2af", done: "#a6e3a1",
-    error: "#f38ba8", waiting: "#89b4fa", interrupted: "#fab387",
+    idle: "#585b70", running: "#f9e2af", "tool-running": "#89dceb", done: "#a6e3a1",
+    error: "#f38ba8", waiting: "#89b4fa", interrupted: "#fab387", stale: "#f9e2af",
   },
   icons: {
-    idle: "○", running: "●", done: "✓",
-    error: "✗", waiting: "◉", interrupted: "⚠",
+    idle: "○", running: "●", "tool-running": "⚙", done: "✓",
+    error: "✗", waiting: "◉", interrupted: "⚠", stale: "⚠",
   },
 };
 
@@ -61,8 +61,8 @@ const CATPPUCCIN_LATTE: Theme = {
     base: "#eff1f5", mantle: "#e6e9ef", crust: "#dce0e8",
   },
   status: {
-    idle: "#acb0be", running: "#df8e1d", done: "#40a02b",
-    error: "#d20f39", waiting: "#1e66f5", interrupted: "#fe640b",
+    idle: "#acb0be", running: "#df8e1d", "tool-running": "#04a5e5", done: "#40a02b",
+    error: "#d20f39", waiting: "#1e66f5", interrupted: "#fe640b", stale: "#df8e1d",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -77,8 +77,8 @@ const TOKYO_NIGHT: Theme = {
     base: "#1a1b26", mantle: "#16161e", crust: "#13131a",
   },
   status: {
-    idle: "#343a52", running: "#e0af68", done: "#9ece6a",
-    error: "#f7768e", waiting: "#7aa2f7", interrupted: "#ff9e64",
+    idle: "#343a52", running: "#e0af68", "tool-running": "#7dcfff", done: "#9ece6a",
+    error: "#f7768e", waiting: "#7aa2f7", interrupted: "#ff9e64", stale: "#e0af68",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -93,8 +93,8 @@ const GRUVBOX_DARK: Theme = {
     base: "#282828", mantle: "#1d2021", crust: "#1b1b1b",
   },
   status: {
-    idle: "#665c54", running: "#fabd2f", done: "#b8bb26",
-    error: "#fb4934", waiting: "#83a598", interrupted: "#fe8019",
+    idle: "#665c54", running: "#fabd2f", "tool-running": "#83a598", done: "#b8bb26",
+    error: "#fb4934", waiting: "#83a598", interrupted: "#fe8019", stale: "#fabd2f",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -109,8 +109,8 @@ const NORD: Theme = {
     base: "#2e3440", mantle: "#272c36", crust: "#242933",
   },
   status: {
-    idle: "#4c566a", running: "#ebcb8b", done: "#a3be8c",
-    error: "#bf616a", waiting: "#81a1c1", interrupted: "#d08770",
+    idle: "#4c566a", running: "#ebcb8b", "tool-running": "#88c0d0", done: "#a3be8c",
+    error: "#bf616a", waiting: "#81a1c1", interrupted: "#d08770", stale: "#ebcb8b",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -125,8 +125,8 @@ const DRACULA: Theme = {
     base: "#282a36", mantle: "#21222c", crust: "#191a21",
   },
   status: {
-    idle: "#6272a4", running: "#f1fa8c", done: "#50fa7b",
-    error: "#ff5555", waiting: "#8be9fd", interrupted: "#ffb86c",
+    idle: "#6272a4", running: "#f1fa8c", "tool-running": "#8be9fd", done: "#50fa7b",
+    error: "#ff5555", waiting: "#8be9fd", interrupted: "#ffb86c", stale: "#f1fa8c",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -141,8 +141,8 @@ const CATPPUCCIN_FRAPPE: Theme = {
     base: "#303446", mantle: "#292c3c", crust: "#232634",
   },
   status: {
-    idle: "#626880", running: "#e5c890", done: "#a6d189",
-    error: "#e78284", waiting: "#8da4e2", interrupted: "#ef9f76",
+    idle: "#626880", running: "#e5c890", "tool-running": "#99d1db", done: "#a6d189",
+    error: "#e78284", waiting: "#8da4e2", interrupted: "#ef9f76", stale: "#e5c890",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -157,8 +157,8 @@ const CATPPUCCIN_MACCHIATO: Theme = {
     base: "#24273a", mantle: "#1e2030", crust: "#181926",
   },
   status: {
-    idle: "#5b6078", running: "#eed49f", done: "#a6da95",
-    error: "#ed8796", waiting: "#8aadf4", interrupted: "#f5a97f",
+    idle: "#5b6078", running: "#eed49f", "tool-running": "#91d7e3", done: "#a6da95",
+    error: "#ed8796", waiting: "#8aadf4", interrupted: "#f5a97f", stale: "#eed49f",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -173,8 +173,8 @@ const GITHUB_DARK: Theme = {
     base: "#0d1117", mantle: "#010409", crust: "#010409",
   },
   status: {
-    idle: "#484f58", running: "#e3b341", done: "#3fb950",
-    error: "#f85149", waiting: "#58a6ff", interrupted: "#d29922",
+    idle: "#484f58", running: "#e3b341", "tool-running": "#58a6ff", done: "#3fb950",
+    error: "#f85149", waiting: "#58a6ff", interrupted: "#d29922", stale: "#e3b341",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -189,8 +189,8 @@ const ONE_DARK: Theme = {
     base: "#282c34", mantle: "#21252b", crust: "#1b1f27",
   },
   status: {
-    idle: "#5c6370", running: "#e5c07b", done: "#98c379",
-    error: "#e06c75", waiting: "#61afef", interrupted: "#d19a66",
+    idle: "#5c6370", running: "#e5c07b", "tool-running": "#61afef", done: "#98c379",
+    error: "#e06c75", waiting: "#61afef", interrupted: "#d19a66", stale: "#e5c07b",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -205,8 +205,8 @@ const KANAGAWA: Theme = {
     base: "#1F1F28", mantle: "#16161D", crust: "#131320",
   },
   status: {
-    idle: "#54546D", running: "#D7A657", done: "#98BB6C",
-    error: "#E82424", waiting: "#7E9CD8", interrupted: "#FFA066",
+    idle: "#54546D", running: "#D7A657", "tool-running": "#7FB4CA", done: "#98BB6C",
+    error: "#E82424", waiting: "#7E9CD8", interrupted: "#FFA066", stale: "#D7A657",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -221,8 +221,8 @@ const EVERFOREST: Theme = {
     base: "#2d353b", mantle: "#272e33", crust: "#232a2e",
   },
   status: {
-    idle: "#7a8478", running: "#dbbc7f", done: "#a7c080",
-    error: "#e67e80", waiting: "#7fbbb3", interrupted: "#e69875",
+    idle: "#7a8478", running: "#dbbc7f", "tool-running": "#7fbbb3", done: "#a7c080",
+    error: "#e67e80", waiting: "#7fbbb3", interrupted: "#e69875", stale: "#dbbc7f",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -237,8 +237,8 @@ const MATERIAL: Theme = {
     base: "#263238", mantle: "#1e272c", crust: "#192227",
   },
   status: {
-    idle: "#546e7a", running: "#ffcb6b", done: "#c3e88d",
-    error: "#f07178", waiting: "#82aaff", interrupted: "#f78c6c",
+    idle: "#546e7a", running: "#ffcb6b", "tool-running": "#82aaff", done: "#c3e88d",
+    error: "#f07178", waiting: "#82aaff", interrupted: "#f78c6c", stale: "#ffcb6b",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -253,8 +253,8 @@ const COBALT2: Theme = {
     base: "#193549", mantle: "#122738", crust: "#0e1e2e",
   },
   status: {
-    idle: "#2d5a7b", running: "#ffc600", done: "#9eff80",
-    error: "#ff0088", waiting: "#0088ff", interrupted: "#ff628c",
+    idle: "#2d5a7b", running: "#ffc600", "tool-running": "#0088ff", done: "#9eff80",
+    error: "#ff0088", waiting: "#0088ff", interrupted: "#ff628c", stale: "#ffc600",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -269,8 +269,8 @@ const FLEXOKI: Theme = {
     base: "#100F0F", mantle: "#0D0D0C", crust: "#0A0A09",
   },
   status: {
-    idle: "#575653", running: "#D0A215", done: "#879A39",
-    error: "#D14D41", waiting: "#4385BE", interrupted: "#DA702C",
+    idle: "#575653", running: "#D0A215", "tool-running": "#4385BE", done: "#879A39",
+    error: "#D14D41", waiting: "#4385BE", interrupted: "#DA702C", stale: "#D0A215",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -285,8 +285,8 @@ const AYU: Theme = {
     base: "#0B0E14", mantle: "#090C10", crust: "#070A0E",
   },
   status: {
-    idle: "#565B66", running: "#E6B450", done: "#7FD962",
-    error: "#D95757", waiting: "#59C2FF", interrupted: "#FF8F40",
+    idle: "#565B66", running: "#E6B450", "tool-running": "#39BAE6", done: "#7FD962",
+    error: "#D95757", waiting: "#59C2FF", interrupted: "#FF8F40", stale: "#E6B450",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -301,8 +301,8 @@ const AURA: Theme = {
     base: "#15141b", mantle: "#110f17", crust: "#0f0f0f",
   },
   status: {
-    idle: "#6d6d6d", running: "#ffca85", done: "#61ffca",
-    error: "#ff6767", waiting: "#a277ff", interrupted: "#ffca85",
+    idle: "#6d6d6d", running: "#ffca85", "tool-running": "#82e2ff", done: "#61ffca",
+    error: "#ff6767", waiting: "#a277ff", interrupted: "#ffca85", stale: "#ffca85",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };
@@ -317,8 +317,8 @@ const MATRIX: Theme = {
     base: "#0a0e0a", mantle: "#070a07", crust: "#050705",
   },
   status: {
-    idle: "#2e4a37", running: "#e6ff57", done: "#62ff94",
-    error: "#ff4b4b", waiting: "#30b3ff", interrupted: "#ffa83d",
+    idle: "#2e4a37", running: "#e6ff57", "tool-running": "#30b3ff", done: "#62ff94",
+    error: "#ff4b4b", waiting: "#30b3ff", interrupted: "#ffa83d", stale: "#e6ff57",
   },
   icons: CATPPUCCIN_MOCHA.icons,
 };

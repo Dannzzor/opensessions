@@ -89,7 +89,7 @@
  *
  * ### Process death detection
  *   When status is "running" but session.time_updated hasn't advanced for
- *   STUCK_MS (15s), we assume the process died and emit "done".
+ *   STUCK_MS (15s), we assume the process died and emit "stale".
  *
  * ### Multi-step assistant turns
  *   Unlike Amp/Claude Code, OpenCode creates a NEW assistant message row
@@ -315,7 +315,7 @@ export class OpenCodeAgentWatcher implements AgentWatcher {
         if (prev && prev.lastTimestamp === row.time_updated) {
           // Session unchanged — check for stuck detection
           if (prev.status === "running" && now - prev.lastGrowthAt >= STUCK_MS) {
-            prev.status = "done";
+            prev.status = "stale";
             this.emitStatus(row.id, prev);
           }
           continue;

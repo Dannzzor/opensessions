@@ -20,20 +20,23 @@ describe("Agent Contract", () => {
     const statuses: AgentStatus[] = [
       "idle",
       "running",
+      "tool-running",
       "done",
       "error",
       "waiting",
       "interrupted",
+      "stale",
     ];
-    expect(statuses).toHaveLength(6);
+    expect(statuses).toHaveLength(8);
   });
 
-  test("TERMINAL_STATUSES contains done, error, interrupted", () => {
+  test("TERMINAL_STATUSES contains done, error, interrupted, stale", () => {
     // Import the actual set
     const { TERMINAL_STATUSES } = require("../src/contracts/agent");
     expect(TERMINAL_STATUSES.has("done")).toBe(true);
     expect(TERMINAL_STATUSES.has("error")).toBe(true);
     expect(TERMINAL_STATUSES.has("interrupted")).toBe(true);
+    expect(TERMINAL_STATUSES.has("stale")).toBe(true);
     expect(TERMINAL_STATUSES.has("running")).toBe(false);
     expect(TERMINAL_STATUSES.has("idle")).toBe(false);
     expect(TERMINAL_STATUSES.has("waiting")).toBe(false);

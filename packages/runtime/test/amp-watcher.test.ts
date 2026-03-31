@@ -35,6 +35,10 @@ describe("Amp determineStatus", () => {
     expect(determineStatus({ role: "user", content: [{ type: "tool_result" }] })).toBe("running");
   });
 
+  test("returns tool-running for user message with in-progress tool_result", () => {
+    expect(determineStatus({ role: "user", content: [{ type: "tool_result", run: { status: "in-progress" } }] })).toBe("tool-running");
+  });
+
   test("returns running for user message with interrupted=true", () => {
     // User sent new message while agent was running — still means "running"
     expect(determineStatus({ role: "user", interrupted: true, content: [{ type: "text" }] })).toBe("running");
@@ -364,7 +368,7 @@ describe("AmpAgentWatcher", () => {
     expect(interruptedEvents.length).toBe(0);
   });
 
-  test("detects stuck running and promotes to done (process killed)", async () => {
+  test("detects stuck running and promotes to stale (process killed)", async () => {
     writeThread("T-test-010", {
       v: 1,
       messages: [{ role: "assistant", state: { type: "streaming" }, content: [{ type: "thinking" }] }],
@@ -375,18 +379,18 @@ describe("AmpAgentWatcher", () => {
     await new Promise((r) => setTimeout(r, 200));
     const seedCount = events.length;
 
-    // Backdate lastGrowthAt to simulate process killed 16s ago
+    // Backdate lastGrowthAt to simulate a process killed over 2 minutes ago
     const snapshot = (watcher as any).threads.get("T-test-010");
-    snapshot.lastGrowthAt = Date.now() - 16_000;
+    snapshot.lastGrowthAt = Date.now() - 121_000;
 
     // Wait for next poll cycle to detect stuck
     await new Promise((r) => setTimeout(r, 2500));
 
-    const doneEvents = events.slice(seedCount).filter((e) => e.status === "done");
-    expect(doneEvents.length).toBeGreaterThanOrEqual(1);
+    const staleEvents = events.slice(seedCount).filter((e) => e.status === "stale");
+    expect(staleEvents.length).toBeGreaterThanOrEqual(1);
   }, 10_000);
 
-  test("detects stuck running for tool_result last message (killed between turns)", async () => {
+  test("promotes quiet tool_result pause to waiting without emitting stale", async () => {
     writeThread("T-test-011", {
       v: 1,
       messages: [
@@ -400,14 +404,44 @@ describe("AmpAgentWatcher", () => {
     await new Promise((r) => setTimeout(r, 200));
     const seedCount = events.length;
 
-    // Backdate lastGrowthAt
+    // Backdate lastGrowthAt past both waiting and stuck thresholds.
+    // tool_result pauses should become waiting first, not stale.
     const snapshot = (watcher as any).threads.get("T-test-011");
-    snapshot.lastGrowthAt = Date.now() - 16_000;
+    snapshot.lastGrowthAt = Date.now() - 121_000;
 
     await new Promise((r) => setTimeout(r, 2500));
 
-    const doneEvents = events.slice(seedCount).filter((e) => e.status === "done");
-    expect(doneEvents.length).toBeGreaterThanOrEqual(1);
+    const postSeed = events.slice(seedCount);
+    const waitingEvents = postSeed.filter((e) => e.status === "waiting");
+    const staleEvents = postSeed.filter((e) => e.status === "stale");
+
+    expect(waitingEvents.length).toBeGreaterThanOrEqual(1);
+    expect(staleEvents).toHaveLength(0);
+  }, 10_000);
+
+  test("keeps in-progress tool_result in tool-running without promoting to waiting", async () => {
+    writeThread("T-test-011b", {
+      v: 1,
+      messages: [
+        { role: "assistant", state: { type: "complete", stopReason: "tool_use" }, content: [{ type: "tool_use" }] },
+        { role: "user", content: [{ type: "tool_result", run: { status: "in-progress", progress: { output: "still going" } } }] },
+      ],
+      env: { initial: { trees: [{ uri: "file:///projects/myapp" }] } },
+    });
+
+    watcher.start(ctx);
+    await new Promise((r) => setTimeout(r, 200));
+    const seedCount = events.length;
+
+    const snapshot = (watcher as any).threads.get("T-test-011b");
+    snapshot.lastGrowthAt = Date.now() - 10_000;
+
+    await new Promise((r) => setTimeout(r, 2500));
+
+    expect(events[seedCount - 1]!.status).toBe("tool-running");
+    const postSeed = events.slice(seedCount);
+    expect(postSeed.filter((e) => e.status === "waiting")).toHaveLength(0);
+    expect(postSeed.filter((e) => e.status === "stale")).toHaveLength(0);
   }, 10_000);
 
   test("streaming state during seed emits running", async () => {

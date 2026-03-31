@@ -1,4 +1,4 @@
-export type AgentStatus = "idle" | "running" | "done" | "error" | "waiting" | "interrupted";
+export type AgentStatus = "idle" | "running" | "tool-running" | "done" | "error" | "waiting" | "interrupted" | "stale";
 
 export interface AgentEvent {
   agent: string;
@@ -13,4 +13,4 @@ export interface AgentEvent {
   paneId?: string;
 }
 
-export const TERMINAL_STATUSES = new Set<AgentStatus>(["done", "error", "interrupted"]);
+export const TERMINAL_STATUSES = new Set<AgentStatus>(["done", "error", "interrupted", "stale"]);

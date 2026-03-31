@@ -5,8 +5,10 @@ const MAX_EVENT_TIMESTAMPS = 30;
 const TERMINAL_PRUNE_MS = 5 * 60 * 1000;
 
 const STATUS_PRIORITY: Record<string, number> = {
-  running: 5,
-  error: 4,
+  "tool-running": 7,
+  running: 6,
+  error: 5,
+  stale: 4,
   interrupted: 3,
   waiting: 2,
   done: 1,
@@ -135,7 +137,7 @@ export class AgentTracker {
     const now = Date.now();
     for (const [session, sessionInstances] of this.instances) {
       for (const [key, event] of sessionInstances) {
-        if (event.status === "running" && now - event.ts > timeoutMs) {
+        if ((event.status === "running" || event.status === "tool-running") && now - event.ts > timeoutMs) {
           if (this.isPinned(session, key)) continue;
           sessionInstances.delete(key);
           this.unseenInstances.delete(this.unseenKey(session, key));

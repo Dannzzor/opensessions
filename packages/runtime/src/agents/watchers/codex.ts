@@ -98,8 +98,8 @@
  *   is mid-stream (function_call, reasoning, commentary, or token_count).
  *   Many historical sessions show this pattern — permanently stuck with
  *   no task_complete or turn_aborted.
- *   After STUCK_MS (15s) of no file growth while in a "running" state,
- *   we promote the status to "done".
+ *   After STUCK_MS (15s) of no file growth while in a "running" or
+ *   "waiting" state, we promote the status to "stale".
  *
  * ### Permission prompt detection
  *   When Codex awaits tool approval (approval_policy != never), the last
@@ -493,7 +493,7 @@ export class CodexAgentWatcher implements AgentWatcher {
 
       // Stuck detection: no file growth while running/waiting → assume process died
       if ((prev.status === "running" || prev.status === "waiting") && prev.lastGrowthAt && now - prev.lastGrowthAt >= STUCK_MS) {
-        prev.status = "done";
+        prev.status = "stale";
         prev.toolUseSeenAt = undefined;
         prev.lastGrowthAt = undefined;
         this.emitStatus(threadId, prev);

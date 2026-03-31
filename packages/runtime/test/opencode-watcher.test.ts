@@ -353,7 +353,7 @@ describe("OpenCodeAgentWatcher", () => {
     expect(postSeed[0]!.status).toBe("error");
   });
 
-  test("detects stuck running and promotes to done (process killed)", async () => {
+  test("detects stuck running and promotes to stale (process killed)", async () => {
     const now = Date.now();
     insertSession("ses_008", "/projects/myapp", "Stuck session", now);
     insertMessage("msg_008a", "ses_008", {
@@ -373,8 +373,8 @@ describe("OpenCodeAgentWatcher", () => {
     // Wait for next poll cycle
     await new Promise((r) => setTimeout(r, 3500));
 
-    const doneEvents = events.slice(seedCount).filter((e) => e.status === "done");
-    expect(doneEvents.length).toBeGreaterThanOrEqual(1);
+    const staleEvents = events.slice(seedCount).filter((e) => e.status === "stale");
+    expect(staleEvents.length).toBeGreaterThanOrEqual(1);
   }, 10_000);
 
   test("stays running through multi-step tool use cycle", async () => {

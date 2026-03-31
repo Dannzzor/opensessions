@@ -360,7 +360,7 @@ describe("ClaudeCodeAgentWatcher", () => {
     expect(runningEvents.length).toBe(0);
   });
 
-  test("detects stuck running and promotes to done", async () => {
+  test("detects stuck running and promotes to stale", async () => {
     const projDir = join(tmpDir, "-projects-myapp");
     mkdirSync(projDir, { recursive: true });
 
@@ -391,8 +391,8 @@ describe("ClaudeCodeAgentWatcher", () => {
     // Wait for next poll cycle
     await new Promise((r) => setTimeout(r, 2500));
 
-    const doneEvents = events.slice(seedCount).filter((e) => e.status === "done");
-    expect(doneEvents.length).toBeGreaterThanOrEqual(1);
+    const staleEvents = events.slice(seedCount).filter((e) => e.status === "stale");
+    expect(staleEvents.length).toBeGreaterThanOrEqual(1);
   }, 10_000);
 
   test("keeps running during streaming partials (thinking → text → tool_use)", async () => {

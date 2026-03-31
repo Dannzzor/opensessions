@@ -43,6 +43,22 @@ describe("AgentTracker", () => {
     expect(tracker.getUnseen()).toContain("sess-1");
   });
 
+  test("applyEvent treats stale as a terminal unseen status", () => {
+    tracker.applyEvent(event({ session: "sess-1", status: "stale" }));
+
+    expect(tracker.getUnseen()).toContain("sess-1");
+    expect(tracker.getState("sess-1")!.status).toBe("stale");
+  });
+
+  test("pruneStuck removes tool-running states older than timeout", () => {
+    const oldTs = Date.now() - 4 * 60 * 1000;
+    tracker.applyEvent(event({ session: "sess-1", status: "tool-running", ts: oldTs }));
+
+    tracker.pruneStuck(3 * 60 * 1000);
+
+    expect(tracker.getState("sess-1")).toBeNull();
+  });
+
   test("applyEvent does NOT mark terminal status as unseen when session is active", () => {
     tracker.setActiveSessions(["sess-1"]);
     tracker.applyEvent(event({ session: "sess-1", status: "done" }));
@@ -133,7 +149,7 @@ describe("AgentTracker", () => {
 
   test("pruneStuck does NOT remove non-running states regardless of age", () => {
     const oldTs = Date.now() - 10 * 60 * 1000;
-    tracker.applyEvent(event({ session: "sess-1", status: "done", ts: oldTs }));
+    tracker.applyEvent(event({ session: "sess-1", status: "stale", ts: oldTs }));
 
     tracker.pruneStuck(3 * 60 * 1000);
 

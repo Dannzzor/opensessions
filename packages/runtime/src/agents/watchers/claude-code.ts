@@ -60,7 +60,7 @@
  *
  * ### Stuck process detection:
  *   If status is "running" or "waiting" and the file hasn't grown for
- *   STUCK_RUNNING_MS, we assume the process died and emit "done".
+ *   STUCK_RUNNING_MS, we assume the process died and emit "stale".
  */
 
 import { watch, type FSWatcher } from "fs";
@@ -275,7 +275,7 @@ export class ClaudeCodeAgentWatcher implements AgentWatcher {
 
       // Stuck detection: no file growth while running/waiting → assume process died
       if ((prev.status === "running" || prev.status === "waiting") && prev.lastGrowthAt && now - prev.lastGrowthAt >= STUCK_RUNNING_MS) {
-        prev.status = "done";
+        prev.status = "stale";
         prev.toolUseSeenAt = undefined;
         prev.lastGrowthAt = undefined;
         this.emitStatus(threadId, prev);

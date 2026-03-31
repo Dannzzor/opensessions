@@ -12,6 +12,7 @@ import {
   type ClientCommand,
   type Theme,
   type MetadataTone,
+  TERMINAL_STATUSES,
   SERVER_PORT,
   SERVER_HOST,
   BUILTIN_THEMES,
@@ -99,6 +100,45 @@ function persistDetailPanelHeight(sessionName: string, height: number): void {
   });
 }
 
+function localLinkText(link: SessionData["localLinks"][number]): string {
+  if (link.kind === "direct") return String(link.port);
+
+  try {
+    const url = new URL(link.url);
+    return url.port && url.port !== "80" && url.port !== "443" && url.port !== "1355"
+      ? url.host
+      : url.hostname;
+  } catch {
+    return link.label;
+  }
+}
+
+function wrapLocalLinks(links: SessionData["localLinks"], maxWidth: number): SessionData["localLinks"][] {
+  if (links.length === 0) return [];
+
+  const rows: SessionData["localLinks"][] = [];
+  let currentRow: SessionData["localLinks"] = [];
+  let currentWidth = 0;
+
+  for (const link of links) {
+    const textWidth = localLinkText(link).length;
+    const itemWidth = currentRow.length === 0 ? textWidth : textWidth + 3;
+
+    if (currentRow.length > 0 && currentWidth + itemWidth > maxWidth) {
+      rows.push(currentRow);
+      currentRow = [link];
+      currentWidth = textWidth;
+      continue;
+    }
+
+    currentRow.push(link);
+    currentWidth += itemWidth;
+  }
+
+  if (currentRow.length > 0) rows.push(currentRow);
+  return rows;
+}
+
 /** Refocus the main (non-sidebar) pane after TUI capability detection finishes.
  *  This must happen from the TUI process — doing it from start.sh races with
  *  capability query responses and leaks escape sequences to the main pane. */
@@ -174,6 +214,7 @@ function App() {
   const [mySession, setMySession] = createSignal<string | null>(null);
   const [connected, setConnected] = createSignal(false);
   const [spinIdx, setSpinIdx] = createSignal(0);
+  const [terminalWidth, setTerminalWidth] = createSignal(Math.max(0, renderer.terminalWidth));
   const [detailPanelHeight, setDetailPanelHeight] = createSignal(DEFAULT_DETAIL_PANEL_HEIGHT);
   const [isDetailResizeHover, setIsDetailResizeHover] = createSignal(false);
   const [isDetailResizing, setIsDetailResizing] = createSignal(false);
@@ -411,6 +452,7 @@ function App() {
   }
 
   onMount(() => {
+    setTerminalWidth(Math.max(0, renderer.terminalWidth));
     logResizeDebug("mount", {
       startupSessionName,
       localSessionName: getLocalSessionName(),
@@ -450,6 +492,7 @@ function App() {
       let lastReportedWidth = renderer.terminalWidth;
       const onResize = () => {
         const width = renderer.terminalWidth;
+        setTerminalWidth(Math.max(0, width));
         if (width !== lastReportedWidth) {
           lastReportedWidth = width;
           const my = mySession();
@@ -704,7 +747,7 @@ function App() {
   });
 
   const runningCount = createMemo(() =>
-    sessions.filter((s) => s.agentState?.status === "running").length,
+    sessions.filter((s) => s.agentState?.status === "running" || s.agentState?.status === "tool-running").length,
   );
 
   const errorCount = createMemo(() =>
@@ -753,37 +796,33 @@ function App() {
         </For>
       </scrollbox>
 
-      {/* Listening ports for focused session — above detail panel */}
-      <Show when={focusedData()?.ports?.length}>
+      {/* Local URLs for focused session — above detail panel */}
+      <Show when={focusedData()?.localLinks?.length}>
         {(_) => {
-          const portRows = () => {
-            const ports = focusedData()?.ports ?? [];
-            const maxPerRow = 3;
-            const rows: number[][] = [];
-            for (let i = 0; i < ports.length; i += maxPerRow) {
-              rows.push(ports.slice(i, i + maxPerRow));
-            }
-            return rows;
+          const linkRows = () => {
+            const links = focusedData()?.localLinks ?? [];
+            const availableWidth = Math.max(12, terminalWidth() - 10);
+            return wrapLocalLinks(links, availableWidth);
           };
           return (
             <box flexDirection="column" flexShrink={0} paddingLeft={2}>
-              <For each={portRows()}>
-                {(ports, rowIndex) => (
+              <For each={linkRows()}>
+                {(links, rowIndex) => (
                   <box flexDirection="row" paddingRight={1}>
                     <text flexShrink={0}>
                       <span style={{ fg: rowIndex() === 0 ? P().overlay0 : P().surface2, attributes: DIM }}>
                         {rowIndex() === 0 ? "local " : "      "}
                       </span>
                     </text>
-                    <For each={ports}>
-                      {(port, portIndex) => (
+                    <For each={links}>
+                      {(link, linkIndex) => (
                         <box flexDirection="row" flexShrink={0}>
                           <text onMouseDown={() => {
-                            Bun.spawn(["open", `http://localhost:${port}`], { stdout: "ignore", stderr: "ignore" });
+                            Bun.spawn(["open", link.url], { stdout: "ignore", stderr: "ignore" });
                           }}>
-                            <span style={{ fg: P().sky, attributes: BOLD }}>{String(port)}</span>
+                            <span style={{ fg: P().sky, attributes: BOLD }}>{localLinkText(link)}</span>
                           </text>
-                          <Show when={portIndex() < ports.length - 1}>
+                          <Show when={linkIndex() < links.length - 1}>
                             <text>
                               <span style={{ fg: P().surface2 }}>{" · "}</span>
                             </text>
@@ -1268,12 +1307,13 @@ function AgentListItem(props: AgentListItemProps) {
   const [isDismissHover, setIsDismissHover] = createSignal(false);
   const [isFlash, setIsFlash] = createSignal(false);
 
-  const isTerminal = () => ["done", "error", "interrupted"].includes(props.agent.status);
+  const isTerminal = () => TERMINAL_STATUSES.has(props.agent.status);
   const isUnseen = () => isTerminal() && props.agent.unseen === true;
 
   const icon = () => {
     if (isUnseen()) return UNSEEN_ICON;
     if (isTerminal()) return props.agent.status === "done" ? "✓" : props.agent.status === "error" ? "✗" : "⚠";
+    if (props.agent.status === "tool-running") return "⚙";
     if (props.agent.status === "running") return SPINNERS[props.spinIdx() % SPINNERS.length]!;
     if (props.agent.status === "waiting") return "◉";
     return "○";
@@ -1282,6 +1322,7 @@ function AgentListItem(props: AgentListItemProps) {
   const color = () => {
     if (isTerminal()) {
       if (props.agent.status === "error") return P().red;
+      if (props.agent.status === "stale") return P().yellow;
       if (props.agent.status === "interrupted") return P().peach;
       return isUnseen() ? P().teal : P().green;
     }
@@ -1289,9 +1330,11 @@ function AgentListItem(props: AgentListItemProps) {
   };
 
   const statusText = () => {
+    if (props.agent.status === "tool-running") return "tools";
     if (props.agent.status === "running") return "running";
     if (props.agent.status === "done") return "done";
     if (props.agent.status === "error") return "error";
+    if (props.agent.status === "stale") return "stale";
     if (props.agent.status === "interrupted") return "stopped";
     if (props.agent.status === "waiting") return "waiting";
     return "";
@@ -1383,14 +1426,16 @@ function SessionCard(props: SessionCardProps) {
   const unseen = () => props.session.unseen;
 
   const isUnseenTerminal = () =>
-    unseen() && ["done", "error", "interrupted"].includes(status());
+    unseen() && TERMINAL_STATUSES.has(status());
 
   const accentColor = () => {
     if (props.isCurrent) return P().green;
     if (isUnseenTerminal()) return unseenAccentColor();
     const s = status();
     if (s === "error") return P().red;
+    if (s === "stale") return P().yellow;
     if (s === "interrupted") return P().peach;
+    if (s === "tool-running" || s === "waiting") return SC()[s];
     if (s === "running") return P().yellow;
     if (props.isFocused) return P().lavender;
     return "transparent";
@@ -1399,14 +1444,20 @@ function SessionCard(props: SessionCardProps) {
   const unseenAccentColor = () => {
     const s = status();
     if (s === "error") return P().red;
+    if (s === "stale") return P().yellow;
     if (s === "interrupted") return P().peach;
     return P().teal;
   };
 
   const statusIcon = () => {
     const s = status();
-    if (s === "running") return SPINNERS[props.spinIdx() % SPINNERS.length]!;
     if (isUnseenTerminal()) return UNSEEN_ICON;
+    if (s === "done") return "✓";
+    if (s === "error") return "✗";
+    if (s === "stale" || s === "interrupted") return "⚠";
+    if (s === "tool-running") return "⚙";
+    if (s === "running") return SPINNERS[props.spinIdx() % SPINNERS.length]!;
+    if (s === "waiting") return "◉";
     return "";
   };
 

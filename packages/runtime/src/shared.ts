@@ -7,6 +7,13 @@ export const PID_FILE = "/tmp/opensessions.pid";
 export const SERVER_IDLE_TIMEOUT_MS = 30_000;
 export const STUCK_RUNNING_TIMEOUT_MS = 3 * 60 * 1000;
 
+export interface LocalLink {
+  kind: "direct" | "portless";
+  port: number;
+  url: string;
+  label: string;
+}
+
 export interface SessionData {
   name: string;
   createdAt: number;
@@ -17,6 +24,7 @@ export interface SessionData {
   unseen: boolean;
   panes: number;
   ports: number[];
+  localLinks: LocalLink[];
   windows: number;
   uptime: string;
   agentState: AgentEvent | null;
@@ -142,17 +150,21 @@ export const C = {
 export const STATUS_COLORS: Record<AgentStatus, string> = {
   idle: C.surface2,
   running: C.yellow,
+  "tool-running": C.sky,
   done: C.green,
   error: C.red,
   waiting: C.blue,
   interrupted: C.peach,
+  stale: C.yellow,
 };
 
 export const STATUS_ICONS: Record<AgentStatus, string> = {
   idle: "○",
   running: "●",
+  "tool-running": "⚙",
   done: "✓",
   error: "✗",
   waiting: "◉",
   interrupted: "⚠",
+  stale: "⚠",
 };
