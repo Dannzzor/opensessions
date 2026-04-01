@@ -3,6 +3,7 @@ import {
   ClaudeCodeAgentWatcher,
   CodexAgentWatcher,
   OpenCodeAgentWatcher,
+  CursorAgentWatcher,
   PluginLoader,
   SERVER_HOST,
   SERVER_PORT,
@@ -66,6 +67,7 @@ loader.registerWatcher(new AmpAgentWatcher());
 loader.registerWatcher(new ClaudeCodeAgentWatcher());
 loader.registerWatcher(new CodexAgentWatcher());
 loader.registerWatcher(new OpenCodeAgentWatcher());
+loader.registerWatcher(new CursorAgentWatcher());
 
 const watchers = loader.getWatchers();
 if (watchers.length > 0) {
