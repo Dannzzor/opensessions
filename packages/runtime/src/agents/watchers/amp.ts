@@ -1,102 +1,78 @@
 /**
- * Amp agent watcher
+ * Amp agent watcher — Cloud API + DTW WebSocket edition
  *
- * Watches ~/.local/share/amp/threads/ for JSON file changes,
- * determines agent status from the last message, and emits events
- * mapped to mux sessions via the project directory in each thread.
+ * Uses a two-tier strategy for watching Amp thread status:
  *
- * Also watches ~/.local/share/amp/session.json for thread focus
- * changes — when the user switches threads in Amp, we emit "idle"
- * for terminal threads to clear unseen flags.
+ * 1. **Polling** (Phase 1): Periodically fetches the thread list API to
+ *    discover threads and detect status changes. Used for seed, discovery
+ *    of new threads, and as a fallback when WebSocket isn't available.
  *
- * All file I/O is async to avoid blocking the server event loop.
+ * 2. **DTW WebSocket** (Phase 2): For threads detected as actively running,
+ *    connects to the Durable Thread Worker WebSocket for real-time
+ *    `agentStates` updates. Provides instant status transitions without
+ *    polling. Automatically disconnects on terminal states and falls back
+ *    to polling on failure.
  *
- * ## Amp Thread JSON Lifecycle (observed v2025-03)
+ * ## Data source
  *
- * Each thread file (~/.local/share/amp/threads/T-*.json) is a full
- * JSON document rewritten atomically on every change.  Top-level
- * fields: `v` (version counter), `id`, `title`, `messages`, `env`.
- * The `env.initial.trees[0].uri` contains the project directory as
- * a `file://` URI.
+ * Amp stores threads in the cloud (Durable Thread Workers / DTW).
+ * The local directory ~/.local/share/amp/threads/ is no longer written to.
+ *
+ * - Credentials: ~/.local/share/amp/secrets.json
+ *   Key format: "apiKey@<ampUrl>" (e.g. "apiKey@https://ampcode.com/")
+ *   Fallback: "apiKey" field
+ *
+ * - Amp URL: ~/.config/amp/settings.json `.url` field
+ *   Default: https://ampcode.com
+ *
+ * - Thread list: GET <ampUrl>/api/threads?limit=20
+ *   Returns array of threads with id, title, v, updatedAt,
+ *   env.initial.trees[0].uri (project dir as file:// URI)
+ *
+ * - Thread detail: GET <ampUrl>/api/threads/<id>
+ *   Returns full thread with messages[] array.
+ *   Each message has role, state.type, state.stopReason — exactly
+ *   what our determineStatus() function parses.
+ *
+ * - DTW WebSocket: POST <ampUrl>/api/durable-thread-workers with {threadId}
+ *   returns {wsToken}. Connect to wss://production.ampworkers.com/threads/<id>?wsToken=<token>
+ *   to receive real-time agentStates stream: { state: "idle"|"running"|"tool-running"|"waiting" }
+ *
+ * ## Amp Thread Message Lifecycle
  *
  * ### Message structure
  *   - role: "user" | "assistant"
  *   - state?: { type: string; stopReason?: string }  (assistant only)
- *   - interrupted?: boolean  (user only — set when user sent a new
- *     message while the agent was still running, causing a cancel)
+ *   - interrupted?: boolean  (user only)
  *   - content: ContentItem[]  (tool_use, tool_result, text, thinking)
  *
  * ### State types (assistant messages)
- *   - `streaming`  — model is actively generating (thinking, text,
- *     or tool_use content may already be present, grows over time)
- *   - `complete`   — turn finished, check stopReason:
- *       - `end_turn`   → "done"   (final response delivered)
- *       - `tool_use`   → "running" (tool call pending execution)
- *       - other        → "error"   (e.g. max_tokens)
- *   - `cancelled`  — user interrupted the assistant mid-turn
- *     (Escape key or new message while streaming)
+ *   - `streaming`  → "running"
+ *   - `complete` + stopReason:
+ *       - `end_turn`   → "done"
+ *       - `tool_use`   → "running"
+ *       - other        → "error"
+ *   - `cancelled`  → "interrupted"
  *
  * ### User messages
- *   - role=user with content=[tool_result], run.status=in-progress
- *     → "tool-running" (tool is actively executing, including subagents)
- *   - role=user with content=[tool_result], run.status=done|error|cancelled
- *     → "running" (tool finished, next assistant turn coming)
- *   - role=user with content=[text]  → "running"
- *     (new prompt submitted)
- *   - role=user with interrupted=true  → "running"
- *     (user sent new message while agent was running — the preceding
- *     assistant message will have state.type=cancelled)
+ *   - content=[tool_result] with run.status=in-progress → "tool-running"
+ *   - otherwise → "running"
  *
- * ### Lifecycle flow
- *   1. Thread created: v=0, msgs=0 (empty)
- *   2. User prompt: role=user, state=null
- *   3. Title set: version bump (title populated)
- *   4. Streaming: role=assistant, state.type=streaming
- *      (content grows: thinking → text → tool_use)
- *   5a. Complete: state.type=complete, stopReason=end_turn → "done"
- *   5b. Tool call: state.type=complete, stopReason=tool_use → "running"
- *   6. Tool starts: role=user, content=[tool_result], run.status=in-progress
- *      → "tool-running"
- *   7. Tool finishes: same message rewritten with run.status=done|error|cancelled
- *      → "running" (next assistant turn coming)
- *   8. Repeat from step 4 for next turn
+ * ### Waiting / stale detection
+ *   After TOOL_WAIT_MS (3s) with no version changes at a tool boundary,
+ *   "running" → "waiting". After STUCK_RUNNING_MS (2m) with no version
+ *   changes while actively running/waiting, → "stale".
  *
- * ### Interrupt scenarios
- *   - User presses Escape or sends new message while streaming:
- *     assistant gets state.type=cancelled, followed by user message
- *     (with interrupted=true if it was a new prompt)
- *   - cancelled is the LAST message: thread was abandoned mid-stream
- *
- * ### Waiting / paused detection
- *   Amp can sit quietly between tool phases without being finished:
- *   - assistant state.type=complete + stopReason=tool_use
- *   - user content=[tool_result]
- *   After TOOL_WAIT_MS (3s) of no thread-file growth in either shape,
- *   we promote "running" → "waiting" instead of immediately marking it stale.
- *
- * ### Process death (SIGKILL / crash)
- *   - Thread file stops being updated. Last message stays in whatever
- *     state it was: typically state.type=streaming (killed mid-generation)
- *     or role=user with tool_result (killed between turns).
- *   - The file mtime stops advancing. After STUCK_RUNNING_MS (2m) of
- *     no mtime changes while in an actively generating or waiting state,
- *     we emit "stale".
- *
- * ### session.json
- *   Contains { lastThreadId, lastExecuteThreadId, agentMode, ... }.
- *   When lastThreadId changes, the user focused a different thread
- *   in the Amp UI. If that thread was in a terminal state (done/error/
- *   interrupted/stale), we emit "idle" to clear the unseen flag.
+ * All network I/O is async to avoid blocking the server event loop.
  */
 
-import { watch, type FSWatcher } from "fs";
-import { readdir, stat } from "fs/promises";
-import { join, basename } from "path";
+import { join } from "path";
 import { homedir } from "os";
 import type { AgentStatus } from "../../contracts/agent";
+import { TERMINAL_STATUSES } from "../../contracts/agent";
 import type { AgentWatcher, AgentWatcherContext } from "../../contracts/agent-watcher";
 
-// --- Thread file types ---
+// --- Thread/message types ---
 
 interface MessageState {
   type?: string;
@@ -122,19 +98,59 @@ interface ThreadSnapshot {
   version: number;
   title?: string;
   projectDir?: string;
-  mtimeMs: number;
-  /** Timestamp when we last saw the file grow (mtime advance). For stuck detection. */
+  /** Timestamp when we last saw the version advance. For stuck detection. */
   lastGrowthAt?: number;
-  /** Whether this running snapshot represents a quiet tool boundary that should become waiting before terminalizing. */
+  /** Whether this running snapshot represents a quiet tool boundary that should become waiting. */
   waitingEligible?: boolean;
 }
 
-const STALE_MS = 5 * 60 * 1000;
+/** API thread list item — subset of fields we use */
+interface ApiThreadSummary {
+  id: string;
+  v: number;
+  title?: string;
+  updatedAt?: string;
+  env?: {
+    initial?: {
+      trees?: Array<{ uri?: string }>;
+    };
+  };
+}
+
+/** API thread detail — subset of fields we use */
+interface ApiThreadDetail {
+  id: string;
+  v: number;
+  title?: string;
+  messages?: Message[];
+  env?: {
+    initial?: {
+      trees?: Array<{ uri?: string }>;
+    };
+  };
+}
+
+/** POST /api/durable-thread-workers response */
+interface DtwTokenResponse {
+  wsToken: string;
+  threadVersion?: number;
+  usesDtw?: boolean;
+}
+
+/** WebSocket agentStates message shape */
+interface AgentStateMessage {
+  type?: string;
+  state?: string;
+}
+
+const DTW_WS_BASE = "wss://production.ampworkers.com";
 const POLL_MS = 2000;
 /** How long to wait before promoting quiet tool boundaries from running → waiting */
 const TOOL_WAIT_MS = 3_000;
 /** How long Amp can stay quiet before we consider the thread stale */
 const STUCK_RUNNING_MS = 2 * 60 * 1000;
+/** Only consider threads updated in the last 5 minutes */
+const RECENT_MS = 5 * 60 * 1000;
 
 // --- Status detection ---
 
@@ -195,26 +211,46 @@ function isWaitingCandidate(lastMsg: Message | null): boolean {
   return false;
 }
 
-// --- Async thread file parsing ---
+// --- Credential / config loading ---
 
-async function parseThreadFile(filePath: string): Promise<{ version: number; title?: string; projectDir?: string; lastMessage: Message | null } | null> {
+async function loadAmpUrl(): Promise<string> {
   try {
-    const raw = await Bun.file(filePath).text();
-    const thread = JSON.parse(raw);
-    const messages = thread.messages ?? [];
-    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-    const uri: string = thread.env?.initial?.trees?.[0]?.uri ?? "";
-    const projectDir = uri.startsWith("file://") ? uri.slice(7) : undefined;
+    const settingsPath = join(homedir(), ".config", "amp", "settings.json");
+    const raw = await Bun.file(settingsPath).text();
+    const settings = JSON.parse(raw);
+    if (settings.url && typeof settings.url === "string") return settings.url.replace(/\/$/, "");
+  } catch {
+    // settings.json doesn't exist or is unreadable
+  }
+  return "https://ampcode.com";
+}
 
-    return {
-      version: thread.v ?? 0,
-      title: thread.title || undefined,
-      projectDir,
-      lastMessage: lastMsg ? { role: lastMsg.role, state: lastMsg.state, interrupted: lastMsg.interrupted, content: lastMsg.content } : null,
-    };
+async function loadApiKey(ampUrl: string): Promise<string | null> {
+  try {
+    const secretsPath = join(homedir(), ".local", "share", "amp", "secrets.json");
+    const raw = await Bun.file(secretsPath).text();
+    const secrets = JSON.parse(raw);
+
+    // Try URL-specific key first (with and without trailing slash)
+    const urlWithSlash = ampUrl.endsWith("/") ? ampUrl : `${ampUrl}/`;
+    const urlWithoutSlash = ampUrl.replace(/\/$/, "");
+
+    const key =
+      secrets[`apiKey@${urlWithSlash}`] ??
+      secrets[`apiKey@${urlWithoutSlash}`] ??
+      secrets.apiKey;
+
+    return typeof key === "string" && key.length > 0 ? key : null;
   } catch {
     return null;
   }
+}
+
+// --- API helpers ---
+
+function extractProjectDir(thread: { env?: { initial?: { trees?: Array<{ uri?: string }> } } }): string | undefined {
+  const uri = thread.env?.initial?.trees?.[0]?.uri ?? "";
+  return uri.startsWith("file://") ? uri.slice(7) : undefined;
 }
 
 // --- Watcher implementation ---
@@ -222,36 +258,53 @@ async function parseThreadFile(filePath: string): Promise<{ version: number; tit
 export class AmpAgentWatcher implements AgentWatcher {
   readonly name = "amp";
 
+  /** Internal thread state — exposed for testing via (watcher as any).threads */
   private threads = new Map<string, ThreadSnapshot>();
-  private fsWatcher: FSWatcher | null = null;
-  private sessionWatcher: FSWatcher | null = null;
+  /** Active WebSocket connections per thread ID */
+  private wsConnections = new Map<string, WebSocket>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private ctx: AgentWatcherContext | null = null;
-  private threadsDir: string;
-  private sessionFile: string;
   private scanning = false;
   private seeded = false;
-  private lastFocusedThread: string | null = null;
 
-  constructor() {
-    const dataDir = join(homedir(), ".local", "share", "amp");
-    this.threadsDir = join(dataDir, "threads");
-    this.sessionFile = join(dataDir, "session.json");
-  }
+  /** Loaded once at start. Overridable for testing. */
+  private ampUrl: string | null = null;
+  private apiKey: string | null = null;
+
+  /**
+   * Override the fetch function for testing.
+   * Defaults to globalThis.fetch.
+   */
+  _fetch: typeof fetch = globalThis.fetch.bind(globalThis);
+
+  /**
+   * Override WebSocket constructor for testing.
+   * Defaults to globalThis.WebSocket.
+   */
+  _WebSocket: typeof WebSocket = globalThis.WebSocket;
 
   start(ctx: AgentWatcherContext): void {
     this.ctx = ctx;
-    this.setupWatch();
-    this.setupSessionWatch();
-    setTimeout(() => this.scan(), 50);
-    this.pollTimer = setInterval(() => this.scan(), POLL_MS);
+    this.initAndPoll();
   }
 
   stop(): void {
-    if (this.fsWatcher) { try { this.fsWatcher.close(); } catch {} this.fsWatcher = null; }
-    if (this.sessionWatcher) { try { this.sessionWatcher.close(); } catch {} this.sessionWatcher = null; }
     if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    for (const [, ws] of this.wsConnections) {
+      try { ws.close(); } catch {}
+    }
+    this.wsConnections.clear();
     this.ctx = null;
+  }
+
+  private async initAndPoll(): Promise<void> {
+    this.ampUrl = await loadAmpUrl();
+    this.apiKey = await loadApiKey(this.ampUrl);
+    if (!this.apiKey) return;
+
+    // First scan is the seed
+    await this.poll();
+    this.pollTimer = setInterval(() => this.poll(), POLL_MS);
   }
 
   /** Emit a status change event if we have a valid session mapping */
@@ -272,158 +325,230 @@ export class AmpAgentWatcher implements AgentWatcher {
     return true;
   }
 
-  private async processThread(filePath: string): Promise<boolean> {
-    if (!this.ctx) return false;
-
-    let fileStat;
-    try { fileStat = await stat(filePath); } catch { return false; }
-
-    const threadId = basename(filePath, ".json");
-    const prev = this.threads.get(threadId);
-    const now = Date.now();
-
-    // Quick mtime check — skip if file hasn't changed since we last saw this version
-    if (prev && fileStat.mtimeMs <= prev.mtimeMs) {
-      if (!this.seeded) return false;
-
-      if (prev.status === "running" && prev.waitingEligible && prev.lastGrowthAt && now - prev.lastGrowthAt >= TOOL_WAIT_MS) {
-        prev.status = "waiting";
-        prev.waitingEligible = false;
-        this.emitStatus(threadId, prev);
-        return true;
-      }
-
-      // File unchanged while actively running or already waiting — mark stale.
-      if ((prev.status === "tool-running" || prev.status === "waiting" || (prev.status === "running" && !prev.waitingEligible)) && prev.lastGrowthAt && now - prev.lastGrowthAt >= STUCK_RUNNING_MS) {
-        prev.status = "stale";
-        prev.lastGrowthAt = undefined;
-        prev.waitingEligible = false;
-        this.emitStatus(threadId, prev);
-        return true;
-      }
-
-      return false;
-    }
-
-    const parsed = await parseThreadFile(filePath);
-    if (!parsed) return false;
-
-    const status = determineStatus(parsed.lastMessage);
-    const waitingEligible = status === "running" && isWaitingCandidate(parsed.lastMessage);
-    const statusChanged = prev?.status !== status;
-    const titleChanged = prev?.title !== parsed.title;
-    const projectDirChanged = prev?.projectDir !== parsed.projectDir;
-
-    if (prev && parsed.version === prev.version && !statusChanged && !titleChanged && !projectDirChanged) {
-      // Update mtime even if version unchanged to avoid re-reading
-      prev.mtimeMs = fileStat.mtimeMs;
-      if (prev.status === "running" || prev.status === "tool-running" || prev.status === "waiting") prev.lastGrowthAt = now;
-      prev.waitingEligible = waitingEligible;
-      return false;
-    }
-
-    const snapshot: ThreadSnapshot = {
-      status,
-      version: parsed.version,
-      title: parsed.title,
-      projectDir: parsed.projectDir,
-      mtimeMs: fileStat.mtimeMs,
-      lastGrowthAt: (status === "running" || status === "tool-running") ? now : undefined,
-      waitingEligible,
-    };
-    this.threads.set(threadId, snapshot);
-
-    // Seed mode: record state without emitting
-    if (!this.seeded) return false;
-
-    return (statusChanged || titleChanged) && this.emitStatus(threadId, snapshot);
-  }
-
-  private async scan(): Promise<void> {
-    if (this.scanning || !this.ctx) return;
+  private async poll(): Promise<void> {
+    if (this.scanning || !this.ctx || !this.ampUrl || !this.apiKey) return;
     this.scanning = true;
     const initialSeed = !this.seeded;
 
     try {
-      let files: string[];
-      try { files = await readdir(this.threadsDir); } catch { return; }
+      const threads = await this.fetchThreadList();
+      if (!threads) return;
 
       const now = Date.now();
-      for (const file of files) {
-        if (!file.startsWith("T-") || !file.endsWith(".json")) continue;
-        const filePath = join(this.threadsDir, file);
-        let fileStat;
-        try { fileStat = await stat(filePath); } catch { continue; }
-        if (now - fileStat.mtimeMs > STALE_MS) continue;
-        await this.processThread(filePath);
+
+      for (const thread of threads) {
+        const updatedAt = thread.updatedAt ? new Date(thread.updatedAt).getTime() : 0;
+        if (now - updatedAt > RECENT_MS) continue;
+
+        const prev = this.threads.get(thread.id);
+
+        // Version unchanged — check waiting/stale timers
+        if (prev && thread.v === prev.version) {
+          if (!this.seeded) continue;
+
+          if (prev.status === "running" && prev.waitingEligible && prev.lastGrowthAt && now - prev.lastGrowthAt >= TOOL_WAIT_MS) {
+            prev.status = "waiting";
+            prev.waitingEligible = false;
+            this.emitStatus(thread.id, prev);
+            continue;
+          }
+
+          if ((prev.status === "tool-running" || prev.status === "waiting" || (prev.status === "running" && !prev.waitingEligible)) && prev.lastGrowthAt && now - prev.lastGrowthAt >= STUCK_RUNNING_MS) {
+            prev.status = "stale";
+            prev.lastGrowthAt = undefined;
+            prev.waitingEligible = false;
+            this.emitStatus(thread.id, prev);
+            continue;
+          }
+
+          continue;
+        }
+
+        // Version changed or new thread — fetch full detail
+        await this.processThread(thread.id, thread, prev, now);
       }
     } finally {
       if (initialSeed) {
         this.seeded = true;
         for (const [threadId, snapshot] of this.threads) {
           this.emitStatus(threadId, snapshot);
+          // Connect WebSockets for running threads discovered during seed
+          if (!TERMINAL_STATUSES.has(snapshot.status) && snapshot.status !== "idle" && !this.wsConnections.has(threadId)) {
+            this.connectWebSocket(threadId);
+          }
         }
       }
       this.scanning = false;
     }
   }
 
-  private setupWatch(): void {
-    try {
-      this.fsWatcher = watch(this.threadsDir, (_eventType, filename) => {
-        if (!filename?.startsWith("T-") || !filename.endsWith(".json")) return;
-        this.processThread(join(this.threadsDir, filename));
-      });
-    } catch {
-      // fs.watch failed; polling handles it
+  private async processThread(
+    threadId: string,
+    summary: ApiThreadSummary,
+    prev: ThreadSnapshot | undefined,
+    now: number,
+  ): Promise<void> {
+    const detail = await this.fetchThreadDetail(threadId);
+    if (!detail) return;
+
+    const messages = detail.messages ?? [];
+    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+    const projectDir = extractProjectDir(detail);
+    const title = detail.title || undefined;
+    const version = detail.v ?? summary.v ?? 0;
+
+    const status = determineStatus(lastMsg ? { role: lastMsg.role, state: lastMsg.state, interrupted: lastMsg.interrupted, content: lastMsg.content } : null);
+    const waitingEligible = status === "running" && isWaitingCandidate(lastMsg);
+    const statusChanged = prev?.status !== status;
+    const titleChanged = prev?.title !== title;
+    const projectDirChanged = prev?.projectDir !== projectDir;
+
+    if (prev && version === prev.version && !statusChanged && !titleChanged && !projectDirChanged) {
+      if (prev.status === "running" || prev.status === "tool-running" || prev.status === "waiting") prev.lastGrowthAt = now;
+      prev.waitingEligible = waitingEligible;
+      return;
+    }
+
+    const snapshot: ThreadSnapshot = {
+      status,
+      version,
+      title,
+      projectDir,
+      lastGrowthAt: (status === "running" || status === "tool-running") ? now : undefined,
+      waitingEligible,
+    };
+    this.threads.set(threadId, snapshot);
+
+    // Seed mode: record state without emitting
+    if (!this.seeded) return;
+
+    if (statusChanged || titleChanged) this.emitStatus(threadId, snapshot);
+
+    // Connect WebSocket for actively running threads (non-terminal, non-idle)
+    if (!TERMINAL_STATUSES.has(status) && status !== "idle" && !this.wsConnections.has(threadId)) {
+      this.connectWebSocket(threadId);
     }
   }
 
-  /** Watch Amp's session.json for lastThreadId changes — thread-level "seen" signal */
-  private setupSessionWatch(): void {
-    // Seed the initial focused thread
-    this.checkSessionFocus();
+  // --- DTW WebSocket streaming ---
+
+  private async connectWebSocket(threadId: string): Promise<void> {
+    if (!this.ampUrl || !this.apiKey) return;
+    if (this.wsConnections.has(threadId)) return;
+
+    const token = await this.fetchDtwToken(threadId);
+    if (!token) return;
 
     try {
-      this.sessionWatcher = watch(this.sessionFile, () => {
-        this.checkSessionFocus();
-      });
+      const wsUrl = `${DTW_WS_BASE}/threads/${threadId}?wsToken=${token}`;
+      const ws = new this._WebSocket(wsUrl);
+
+      this.wsConnections.set(threadId, ws);
+
+      ws.onmessage = (event) => {
+        this.handleWsMessage(threadId, event.data);
+      };
+
+      ws.onclose = () => {
+        this.wsConnections.delete(threadId);
+      };
+
+      ws.onerror = () => {
+        this.wsConnections.delete(threadId);
+        try { ws.close(); } catch {}
+      };
     } catch {
-      // session.json doesn't exist yet or can't be watched; ignore
+      // WebSocket construction failed — polling will handle it
     }
   }
 
-  /** Read session.json and emit "idle" for a terminal thread the user has focused in Amp */
-  private async checkSessionFocus(): Promise<void> {
-    if (!this.ctx || !this.seeded) return;
+  private handleWsMessage(threadId: string, data: unknown): void {
+    if (!this.ctx) return;
 
     try {
-      const raw = await Bun.file(this.sessionFile).text();
-      const session = JSON.parse(raw);
-      const threadId: string | undefined = session.lastThreadId;
-      if (!threadId || threadId === this.lastFocusedThread) return;
+      const raw = typeof data === "string" ? data : String(data);
+      const msg: AgentStateMessage = JSON.parse(raw);
 
-      this.lastFocusedThread = threadId;
+      if (!msg.state) return;
 
-      // If this thread is tracked and in a terminal state, the user just "saw" it
+      const status = msg.state as AgentStatus;
       const snapshot = this.threads.get(threadId);
-      if (!snapshot || !snapshot.projectDir) return;
-      if (snapshot.status !== "done" && snapshot.status !== "error" && snapshot.status !== "interrupted" && snapshot.status !== "stale") return;
+      if (!snapshot) return;
 
-      const muxSession = this.ctx.resolveSession(snapshot.projectDir);
-      if (!muxSession || muxSession === "unknown") return;
+      const now = Date.now();
 
-      // Emit "idle" to clear the unseen flag for this specific thread
-      this.ctx.emit({
-        agent: "amp",
-        session: muxSession,
-        status: "idle",
-        ts: Date.now(),
-        threadId,
-        threadName: snapshot.title,
-      });
+      if (snapshot.status === status) {
+        // Same status — update growth timestamp
+        if (status === "running" || status === "tool-running") {
+          snapshot.lastGrowthAt = now;
+        }
+        return;
+      }
+
+      snapshot.status = status;
+      snapshot.lastGrowthAt = (status === "running" || status === "tool-running") ? now : undefined;
+      snapshot.waitingEligible = false;
+
+      this.emitStatus(threadId, snapshot);
+
+      // Disconnect on terminal states — polling will pick up any future changes
+      if (TERMINAL_STATUSES.has(status) || status === "idle") {
+        this.disconnectWebSocket(threadId);
+      }
     } catch {
-      // session.json unreadable; ignore
+      // Malformed message — ignore
+    }
+  }
+
+  private disconnectWebSocket(threadId: string): void {
+    const ws = this.wsConnections.get(threadId);
+    if (ws) {
+      this.wsConnections.delete(threadId);
+      try { ws.close(); } catch {}
+    }
+  }
+
+  private async fetchDtwToken(threadId: string): Promise<string | null> {
+    try {
+      const res = await this._fetch(`${this.ampUrl}/api/durable-thread-workers`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ threadId }),
+      });
+      if (!res.ok) return null;
+      const body = await res.json() as DtwTokenResponse;
+      return body.wsToken ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  // --- API helpers ---
+
+  private async fetchThreadList(): Promise<ApiThreadSummary[] | null> {
+    try {
+      const res = await this._fetch(`${this.ampUrl}/api/threads?limit=20`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+      });
+      if (!res.ok) return null;
+      return await res.json() as ApiThreadSummary[];
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchThreadDetail(threadId: string): Promise<ApiThreadDetail | null> {
+    try {
+      const res = await this._fetch(`${this.ampUrl}/api/threads/${threadId}`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+      });
+      if (!res.ok) return null;
+      return await res.json() as ApiThreadDetail;
+    } catch {
+      return null;
     }
   }
 }
