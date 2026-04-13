@@ -37,7 +37,7 @@ interface ContentItem {
 
 interface CursorLine {
   role?: string;
-  message?: { content?: ContentItem[] };
+  message?: { content?: ContentItem[]; stop_reason?: string | null };
 }
 
 interface SessionState {
@@ -51,6 +51,8 @@ interface SessionState {
 
 const POLL_MS = 2000;
 const STALE_MS = 5 * 60 * 1000;
+/** Assistant text-only JSONL lines are usually streaming chunks; treat as done only after file is quiet */
+const STREAMING_GRACE_MS = 5000;
 const TOOL_USE_WAIT_MS = 3000;
 const STUCK_RUNNING_MS = 15_000;
 const THREAD_NAME_MAX = 80;
@@ -112,10 +114,62 @@ export function determineStatus(line: CursorLine): AgentStatus | null {
     const content = line.message?.content;
     if (!Array.isArray(content)) return "running";
     if (content.some((c) => c.type === "tool_use")) return "running";
-    return "done";
+    if (content.some((c) => c.type === "thinking")) return "running";
+    if (content.some((c) => c.type === "reasoning")) return "running";
+    const stop = line.message?.stop_reason;
+    if (stop === "end_turn" || stop === "stop") return "done";
+    // Plain text lines are streamed as many JSONL records; fold + mtime decide "done"
+    return null;
   }
 
   return null;
+}
+
+function parseLastNonEmptyJsonlLine(lines: string[]): CursorLine | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const raw = lines[i];
+    if (!raw?.trim()) continue;
+    try {
+      return JSON.parse(raw) as CursorLine;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/** Assistant message with only "soft" content types (no tools / thinking / tool_result). */
+function isAssistantTextOnlyStreamChunk(line: CursorLine): boolean {
+  if (line.role !== "assistant") return false;
+  const content = line.message?.content;
+  if (!Array.isArray(content)) return false;
+  return !content.some((c) =>
+    c.type === "tool_use"
+    || c.type === "thinking"
+    || c.type === "reasoning"
+    || c.type === "tool_result",
+  );
+}
+
+/**
+ * Cursor emits many assistant JSONL lines; the last line is often text-only while the model
+ * is still streaming. Use file mtime + optional stop_reason to infer done vs running.
+ */
+export function resolveCursorFoldStatus(
+  foldStatus: AgentStatus,
+  lines: string[],
+  fileMtimeMs: number,
+  now: number,
+): AgentStatus {
+  let status = foldStatus === "idle" ? "idle" : foldStatus;
+  const last = parseLastNonEmptyJsonlLine(lines);
+  if (!last || last.role !== "assistant" || !isAssistantTextOnlyStreamChunk(last)) {
+    return status;
+  }
+  const stop = last.message?.stop_reason;
+  if (stop === "end_turn" || stop === "stop") return "done";
+  if (now - fileMtimeMs < STREAMING_GRACE_MS) return "running";
+  return "done";
 }
 
 function extractUserPlainText(line: CursorLine): string | undefined {
@@ -301,7 +355,7 @@ export class CursorAgentWatcher implements AgentWatcher {
 
     const lines = text.split("\n").filter(Boolean);
     const fold = foldLinesIntoStatus(lines);
-    const status = fold.status === "idle" ? "idle" : fold.status;
+    const status = resolveCursorFoldStatus(fold.status, lines, fileStat.mtimeMs, now);
 
     this.sessions.set(threadId, {
       status,

@@ -1,4 +1,13 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync, appendFileSync, watch, type FSWatcher } from "fs";
+import {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+  appendFileSync,
+  watch,
+  type FSWatcher,
+} from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import type { MuxProvider } from "../contracts/mux";
@@ -317,13 +326,24 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   let dirSessionCacheTs = 0;
   const DIR_CACHE_TTL = 5000;
 
+  function pathKey(dir: string): string {
+    try {
+      return realpathSync(dir);
+    } catch {
+      return dir;
+    }
+  }
+
   function getDirSessionMap(): Map<string, string> {
     const now = Date.now();
     if (dirSessionCache && now - dirSessionCacheTs < DIR_CACHE_TTL) return dirSessionCache;
     const map = new Map<string, string>();
     for (const p of allProviders) {
       for (const s of p.listSessions()) {
-        if (s.dir) map.set(s.dir, s.name);
+        if (!s.dir) continue;
+        map.set(s.dir, s.name);
+        const resolved = pathKey(s.dir);
+        if (resolved !== s.dir) map.set(resolved, s.name);
       }
     }
     dirSessionCache = map;
@@ -334,10 +354,17 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
   const watcherCtx: AgentWatcherContext = {
     resolveSession(projectDir: string): string | null {
       const map = getDirSessionMap();
-      const direct = map.get(projectDir);
-      if (direct) return direct;
-      for (const [dir, name] of map) {
-        if (projectDir.startsWith(dir + "/") || dir.startsWith(projectDir + "/")) return name;
+      const projKeys = [projectDir, pathKey(projectDir)];
+      for (const k of projKeys) {
+        const direct = map.get(k);
+        if (direct) return direct;
+      }
+      for (const k of projKeys) {
+        for (const [dir, name] of map) {
+          if (k.startsWith(dir + "/") || dir.startsWith(k + "/")) return name;
+          const rd = pathKey(dir);
+          if (k.startsWith(rd + "/") || rd.startsWith(k + "/")) return name;
+        }
       }
       return null;
     },
