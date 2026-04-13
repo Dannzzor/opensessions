@@ -9,6 +9,7 @@ import {
   projectDirFromTranscriptPath,
   isToolUseLine,
   extractThreadName,
+  resolveCursorFoldStatus,
 } from "../src/agents/watchers/cursor";
 import type { AgentEvent } from "../src/contracts/agent";
 import type { AgentWatcherContext } from "../src/contracts/agent-watcher";
@@ -57,11 +58,51 @@ describe("Cursor determineStatus", () => {
     })).toBe("running");
   });
 
-  test("assistant text only → done", () => {
+  test("assistant text only (streaming chunk) → null", () => {
     expect(determineStatus({
       role: "assistant",
-      message: { content: [{ type: "text", text: "done" }] },
+      message: { content: [{ type: "text", text: "partial" }] },
+    })).toBe(null);
+  });
+
+  test("assistant text only + stop_reason end_turn → done", () => {
+    expect(determineStatus({
+      role: "assistant",
+      message: {
+        content: [{ type: "text", text: "done" }],
+        stop_reason: "end_turn",
+      },
     })).toBe("done");
+  });
+
+  test("assistant thinking → running", () => {
+    expect(determineStatus({
+      role: "assistant",
+      message: { content: [{ type: "thinking", "thinking": "..." }] },
+    })).toBe("running");
+  });
+});
+
+describe("Cursor resolveCursorFoldStatus", () => {
+  const lines = [
+    JSON.stringify({
+      role: "user",
+      message: { content: [{ type: "text", text: "hi" }] },
+    }),
+    JSON.stringify({
+      role: "assistant",
+      message: { content: [{ type: "text", text: "partial" }] },
+    }),
+  ];
+
+  test("text-only tail + recent mtime → running", () => {
+    const now = 1_000_000;
+    expect(resolveCursorFoldStatus("running", lines, now - 1000, now)).toBe("running");
+  });
+
+  test("text-only tail + old mtime → done", () => {
+    const now = 1_000_000;
+    expect(resolveCursorFoldStatus("running", lines, now - 60_000, now)).toBe("done");
   });
 });
 
@@ -151,7 +192,10 @@ describe("CursorAgentWatcher", () => {
       transcriptPath,
       `${JSON.stringify({
         role: "assistant",
-        message: { content: [{ type: "text", text: "final" }] },
+        message: {
+          content: [{ type: "text", text: "final" }],
+          stop_reason: "end_turn",
+        },
       })}\n`,
     );
 
