@@ -1,9 +1,11 @@
 /**
  * Cursor CLI agent watcher
  *
- * Watches JSONL transcripts under ~/.cursor/projects/<encoded-path>/agent-transcripts/
- * (or $CURSOR_DATA_DIR/projects/...). Paths use the same dash encoding as Claude Code:
- *   /Users/me/proj → Users-me-proj
+ * Watches JSONL transcripts under ~/.cursor/projects/<slug>/agent-transcripts/
+ * (or $CURSOR_DATA_DIR/projects/...). The folder `<slug>` is Cursor's slugifyPath(workspace):
+ *   /Users/me/proj → Users-me-proj (non-alphanumerics → "-", collapse trim)
+ *
+ * Session resolution matches mux cwd via the same slug (`resolveSessionForCursorProject`), not only dash-to-slash decoding.
  *
  * Each line is one message object:
  *   { "role": "user" | "assistant", "message": { "content": [ { "type": "text" | "tool_use" | ... } ] } }
@@ -44,7 +46,10 @@ interface SessionState {
   status: AgentStatus;
   fileSize: number;
   threadName?: string;
+  /** Best-effort path from slug (dash → slash); may not match pane cwd */
   projectDir?: string;
+  /** Directory name under .../projects/ — matches Cursor CLI slugifyPath(cwd) */
+  projectSlug: string;
   toolUseSeenAt?: number;
   lastGrowthAt?: number;
 }
@@ -68,22 +73,38 @@ function cursorDataRoot(): string {
   return process.env.CURSOR_DATA_DIR ?? join(homedir(), ".cursor");
 }
 
-/** Decode Cursor/Claude-style encoded project dir name back to a filesystem path */
+/** Same algorithm as Cursor CLI `slugifyPath` (see bundled agent). */
+export function cursorSlugifyPath(absPath: string): string {
+  return absPath
+    .replace(/[^a-zA-Z0-9]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Decode slug dir name to a heuristic filesystem path (dash → slash). Often matches workspace. */
 export function decodeProjectDir(encoded: string): string {
   const decoded = encoded.replace(/-/g, "/");
   return decoded.startsWith("/") ? decoded : `/${decoded}`;
 }
 
-export function projectDirFromTranscriptPath(filePath: string, projectsRoot: string): string | null {
+/** Slug folder + decoded path from a transcript file under .../projects/<slug>/agent-transcripts/ */
+export function cursorTranscriptProjectInfo(
+  filePath: string,
+  projectsRoot: string,
+): { slug: string; decoded: string } | null {
   const normRoot = projectsRoot.endsWith("/") ? projectsRoot.slice(0, -1) : projectsRoot;
   if (!filePath.startsWith(normRoot)) return null;
   const rel = filePath.slice(normRoot.length + 1);
   const firstSlash = rel.indexOf("/");
   if (firstSlash === -1) return null;
-  const encoded = rel.slice(0, firstSlash);
+  const slug = rel.slice(0, firstSlash);
   const after = rel.slice(firstSlash + 1);
   if (!after.startsWith("agent-transcripts/")) return null;
-  return decodeProjectDir(encoded);
+  return { slug, decoded: decodeProjectDir(slug) };
+}
+
+export function projectDirFromTranscriptPath(filePath: string, projectsRoot: string): string | null {
+  return cursorTranscriptProjectInfo(filePath, projectsRoot)?.decoded ?? null;
 }
 
 function parseThreadId(filePath: string): string {
@@ -292,9 +313,18 @@ export class CursorAgentWatcher implements AgentWatcher {
     this.ctx = null;
   }
 
+  private resolveCursorSession(state: SessionState): string | null {
+    if (!this.ctx) return null;
+    if (this.ctx.resolveSessionForCursorProject) {
+      return this.ctx.resolveSessionForCursorProject(state.projectDir ?? "", state.projectSlug);
+    }
+    if (!state.projectDir) return null;
+    return this.ctx.resolveSession(state.projectDir);
+  }
+
   private emitStatus(threadId: string, state: SessionState): void {
-    if (!this.ctx || !this.seeded || !state.projectDir) return;
-    const session = this.ctx.resolveSession(state.projectDir);
+    if (!this.ctx || !this.seeded) return;
+    const session = this.resolveCursorSession(state);
     if (!session) return;
     this.ctx.emit({
       agent: "cursor",
@@ -309,8 +339,9 @@ export class CursorAgentWatcher implements AgentWatcher {
   private async processFile(filePath: string): Promise<void> {
     if (!this.ctx) return;
 
-    const projectDir = projectDirFromTranscriptPath(filePath, this.projectsRoot);
-    if (!projectDir) return;
+    const info = cursorTranscriptProjectInfo(filePath, this.projectsRoot);
+    if (!info) return;
+    const { decoded: projectDir, slug: projectSlug } = info;
 
     let fileStat;
     try {
@@ -362,6 +393,7 @@ export class CursorAgentWatcher implements AgentWatcher {
       fileSize: fileStat.size,
       threadName: fold.threadName,
       projectDir,
+      projectSlug,
       toolUseSeenAt: fold.lastToolUse && status === "running" ? now : undefined,
       lastGrowthAt: (status === "running" || status === "waiting") ? now : undefined,
     });
@@ -398,8 +430,8 @@ export class CursorAgentWatcher implements AgentWatcher {
       if (!this.seeded) {
         this.seeded = true;
         for (const [threadId, state] of this.sessions) {
-          if (state.status === "idle" || !state.projectDir) continue;
-          const session = this.ctx?.resolveSession(state.projectDir);
+          if (state.status === "idle") continue;
+          const session = this.resolveCursorSession(state);
           if (!session) continue;
           this.ctx?.emit({
             agent: "cursor",

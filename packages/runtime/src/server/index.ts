@@ -15,6 +15,7 @@ import { isFullSidebarCapable, isBatchCapable } from "../contracts/mux";
 import type { AgentEvent } from "../contracts/agent";
 import type { AgentWatcher, AgentWatcherContext } from "../contracts/agent-watcher";
 import { AgentTracker, instanceKey } from "../agents/tracker";
+import { cursorSlugifyPath } from "../agents/watchers/cursor";
 import { SessionOrder } from "./session-order";
 import { SessionMetadataStore } from "./metadata-store";
 import { buildLocalLinks, loadPortlessState } from "./portless";
@@ -351,20 +352,36 @@ export function startServer(mux: MuxProvider, extraProviders?: MuxProvider[], wa
     return map;
   }
 
-  const watcherCtx: AgentWatcherContext = {
-    resolveSession(projectDir: string): string | null {
-      const map = getDirSessionMap();
-      const projKeys = [projectDir, pathKey(projectDir)];
-      for (const k of projKeys) {
-        const direct = map.get(k);
-        if (direct) return direct;
+  function resolveSessionFromDir(projectDir: string): string | null {
+    if (!projectDir) return null;
+    const map = getDirSessionMap();
+    const projKeys = [projectDir, pathKey(projectDir)];
+    for (const k of projKeys) {
+      const direct = map.get(k);
+      if (direct) return direct;
+    }
+    for (const k of projKeys) {
+      for (const [dir, name] of map) {
+        if (k.startsWith(dir + "/") || dir.startsWith(k + "/")) return name;
+        const rd = pathKey(dir);
+        if (k.startsWith(rd + "/") || rd.startsWith(k + "/")) return name;
       }
-      for (const k of projKeys) {
-        for (const [dir, name] of map) {
-          if (k.startsWith(dir + "/") || dir.startsWith(k + "/")) return name;
-          const rd = pathKey(dir);
-          if (k.startsWith(rd + "/") || rd.startsWith(k + "/")) return name;
-        }
+    }
+    return null;
+  }
+
+  const watcherCtx: AgentWatcherContext = {
+    resolveSession: resolveSessionFromDir,
+    resolveSessionForCursorProject(decodedPath: string, projectSlug: string): string | null {
+      const fromPath = resolveSessionFromDir(decodedPath);
+      if (fromPath) return fromPath;
+      if (!projectSlug) return null;
+      const map = getDirSessionMap();
+      for (const [dir, name] of map) {
+        if (!dir) continue;
+        if (cursorSlugifyPath(dir) === projectSlug) return name;
+        const rd = pathKey(dir);
+        if (rd !== dir && cursorSlugifyPath(rd) === projectSlug) return name;
       }
       return null;
     },

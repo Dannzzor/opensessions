@@ -8,6 +8,12 @@ import type { AgentEvent } from "./agent";
 export interface AgentWatcherContext {
   /** Resolve a project directory path to a mux session name, or null if unmatched */
   resolveSession(projectDir: string): string | null;
+  /**
+   * Cursor stores projects as ~/.cursor/projects/<slug>/ where `slug` is
+   * slugifyPath(workspaceRoot) from the CLI. Lets the server match sessions when
+   * decoded paths disagree with mux `pane_current_path`.
+   */
+  resolveSessionForCursorProject?(decodedPath: string, projectSlug: string): string | null;
   /** Emit an agent event (applied to tracker + broadcast automatically) */
   emit(event: AgentEvent): void;
 }

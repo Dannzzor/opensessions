@@ -7,6 +7,8 @@ import {
   determineStatus,
   decodeProjectDir,
   projectDirFromTranscriptPath,
+  cursorSlugifyPath,
+  cursorTranscriptProjectInfo,
   isToolUseLine,
   extractThreadName,
   resolveCursorFoldStatus,
@@ -33,6 +35,22 @@ describe("Cursor projectDirFromTranscriptPath", () => {
 
   test("returns null when path is not under projects root", () => {
     expect(projectDirFromTranscriptPath("/tmp/foo.jsonl", "/other")).toBeNull();
+  });
+});
+
+describe("Cursor slugify + transcript info", () => {
+  test("cursorSlugifyPath matches CLI algorithm", () => {
+    expect(cursorSlugifyPath("/Users/me/myproject")).toBe("Users-me-myproject");
+    expect(cursorSlugifyPath("//tmp//foo//")).toBe("tmp-foo");
+  });
+
+  test("cursorTranscriptProjectInfo returns slug and decoded", () => {
+    const root = "/Users/x/.cursor/projects";
+    const file = "/Users/x/.cursor/projects/Users-me-repo/agent-transcripts/abc/abc.jsonl";
+    expect(cursorTranscriptProjectInfo(file, root)).toEqual({
+      slug: "Users-me-repo",
+      decoded: "/Users/me/repo",
+    });
   });
 });
 
@@ -208,6 +226,31 @@ describe("CursorAgentWatcher", () => {
     expect(events.some((e) => e.status === "running")).toBe(true);
     expect(events.some((e) => e.status === "done")).toBe(true);
     expect(events.some((e) => e.threadId === sessionId)).toBe(true);
+  });
+
+  test("resolves session via slug when resolveSession cannot match cwd", async () => {
+    const watcher = new CursorAgentWatcher();
+
+    const ctx: AgentWatcherContext = {
+      resolveSession: () => null,
+      resolveSessionForCursorProject: (_decoded, slug) =>
+        (slug === "Users-testuser-testproject" ? "tmux-slug" : null),
+      emit: (e: AgentEvent) => events.push(e),
+    };
+
+    writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({
+        role: "user",
+        message: { content: [{ type: "text", text: "go" }] },
+      })}\n`,
+    );
+
+    watcher.start(ctx);
+    await new Promise((r) => setTimeout(r, 200));
+    watcher.stop();
+
+    expect(events.some((e) => e.session === "tmux-slug" && e.agent === "cursor")).toBe(true);
   });
 
   test(
