@@ -1,7 +1,7 @@
 # opensessions
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Star History](https://img.shields.io/github/stars/Ataraxy-Labs/opensessions?style=social)](https://github.com/Ataraxy-Labs/opensessions)
+[![Star History](https://img.shields.io/github/stars/Dannzzor/opensessions?style=social)](https://github.com/Dannzzor/opensessions)
 
 tmux is all you need. make tmux great again :) 
 
@@ -24,7 +24,7 @@ Requirements:
 Add this to `~/.tmux.conf`:
 
 ```tmux
-set -g @plugin 'Ataraxy-Labs/opensessions'
+set -g @plugin 'Dannzzor/opensessions'
 ```
 
 Then reload tmux and install plugins:
@@ -41,7 +41,7 @@ TPM clones the repo into `~/.tmux/plugins/opensessions`. It does not install a s
 If you want the same setup as a single shell command:
 
 ```bash
-grep -q "Ataraxy-Labs/opensessions" ~/.tmux.conf 2>/dev/null || printf '\nset -g @plugin '\''Ataraxy-Labs/opensessions'\''\n' >> ~/.tmux.conf && tmux source-file ~/.tmux.conf && ~/.tmux/plugins/tpm/bin/install_plugins
+grep -q "Dannzzor/opensessions" ~/.tmux.conf 2>/dev/null || printf '\nset -g @plugin '\''Dannzzor/opensessions'\''\n' >> ~/.tmux.conf && tmux source-file ~/.tmux.conf && ~/.tmux/plugins/tpm/bin/install_plugins
 ```
 
 ## Update
@@ -62,7 +62,7 @@ Run the uninstall script **before** removing the plugin files — it cleans up t
 sh ~/.tmux/plugins/opensessions/integrations/tmux-plugin/scripts/uninstall.sh
 ```
 
-Then remove the `set -g @plugin 'Ataraxy-Labs/opensessions'` line from `~/.tmux.conf` and run `prefix + alt + u` (TPM uninstall).
+Then remove the `set -g @plugin 'Dannzzor/opensessions'` line from `~/.tmux.conf` and run `prefix + alt + u` (TPM uninstall).
 
 ## Support Status
 
@@ -112,7 +112,7 @@ Full reference: [docs/reference/programmatic-api.md](./docs/reference/programmat
 Smoke test from a local clone:
 
 ```bash
-git clone https://github.com/Ataraxy-Labs/opensessions.git
+git clone https://github.com/Dannzzor/opensessions.git
 cd opensessions
 bun install
 bun test
@@ -172,7 +172,7 @@ For the full tmux workflow with keybindings, troubleshooting, and configuration 
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Ataraxy-Labs/opensessions&type=Date)](https://star-history.com/#Ataraxy-Labs/opensessions&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Dannzzor/opensessions&type=Date)](https://star-history.com/#Dannzzor/opensessions&Date)
 
 ## License
 
